@@ -1,0 +1,12 @@
+[submodule "extern/VTIL-Core"]
+	path = extern/VTIL-Core
+	url = https://github.com/vtil-project/VTIL-Core.git
+[submodule "extern/VTIL-NativeLifters"]
+	path = extern/VTIL-NativeLifters
+	url = https://github.com/vtil-project/VTIL-NativeLifters.git
+[submodule "extern/VTIL-Capstone"]
+	path = extern/VTIL-Capstone
+	url = https://github.com/aquynh/capstone.git
+[submodule "extern/VTIL-Keystone"]
+	path = extern/VTIL-Keystone
+	url = https://github.com/keystone-engine/keystone.git

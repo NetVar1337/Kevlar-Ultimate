@@ -4,6 +4,7 @@
 #include "host/providers/provider.h"
 #include "core/loader/environment.h"
 #include "core/exec/unicorn_engine.h"
+#include "core/exec/cpu_profile.h"
 #include "core/memory/unicorn_memory.h"
 #include <Logger/Logger.h>
 
@@ -56,10 +57,7 @@ namespace ntoskrnl_export {
         MmUserProbeAddress = 0x7FFFFFFEFFFFULL;
         MmHighestUserAddress = 0x7FFFFFFEFFFFULL;
 
-        SYSTEM_INFO Si;
-        GetNativeSystemInfo(&Si);
-        KeNumberProcessors = (uint8_t)Si.dwNumberOfProcessors;
-        if (KeNumberProcessors < 4) KeNumberProcessors = 4;
+        KeNumberProcessors = (uint8_t)CpuProfile::kLogicalProcessorCount;
 
         NlsAnsiCodePage = (uint16_t)GetACP();
         NlsOemCodePage = (uint16_t)GetOEMCP();

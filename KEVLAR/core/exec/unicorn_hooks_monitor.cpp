@@ -207,7 +207,67 @@ void UnicornEmu::InstallSseAlignCheck(uc_engine* Uc, uint64_t DriverBase, uint64
 
 static int FocusedTraceCount = 0;
 static const int FocusedTraceMax = 30000;
+static constexpr size_t VmContextWordCount = 80;
+static uint64_t VmContextBase = 0;
+static uint64_t VmContextWords[VmContextWordCount] = {};
+static bool VmContextSnapshotValid = false;
+static int VmContextChangeLogCount = 0;
 
+static std::string DescribeVmContextValue(uint64_t Value) {
+    if (Value == 0)
+        return "zero";
+
+    if (Value >= KUSD_BASE_UC && Value < KUSD_BASE_UC + 0x1000)
+        return "KUSER_SHARED_DATA";
+    if (Value >= SYSMOD_BASE_UC && Value < SYSMOD_BASE_UC + 0x1000000)
+        return "system-module";
+
+    uint64_t AllocationBase = 0;
+    uint64_t AllocationSize = 0;
+    void* AllocationHost = nullptr;
+    if (UnicornMem::FindAllocation(Value, AllocationBase, AllocationHost, AllocationSize)) {
+        char Description[160] = {};
+        const std::string Name = UnicornMem::GetAllocationName(Value);
+        sprintf_s(Description, "%s+0x%llx/0x%llx",
+            Name.empty() ? "tracked" : Name.c_str(),
+            Value - AllocationBase, AllocationSize);
+        return Description;
+    }
+
+    return "untracked";
+}
+
+static void LogVmContextDelta(uc_engine* Uc, uint64_t ContextBase) {
+    uint64_t Current[VmContextWordCount] = {};
+    if (uc_mem_read(Uc, ContextBase, Current, sizeof(Current)) != UC_ERR_OK) {
+        Logger::Log("{RED}[VM CONTEXT] unable to read R12 context at 0x%016llx{RESET}\n", ContextBase);
+        return;
+    }
+
+    const bool BaseChanged = !VmContextSnapshotValid || VmContextBase != ContextBase;
+    int Changed = 0;
+    for (size_t I = 0; I < VmContextWordCount; ++I) {
+        if (BaseChanged || Current[I] != VmContextWords[I])
+            ++Changed;
+    }
+
+    Logger::Log("{MAG}[VM CONTEXT] base=0x%016llx %s changed=%d{RESET}\n",
+        ContextBase, BaseChanged ? "new" : "delta", Changed);
+
+    for (size_t I = 0; I < VmContextWordCount && VmContextChangeLogCount < 512; ++I) {
+        if (!BaseChanged && Current[I] == VmContextWords[I])
+            continue;
+
+        Logger::Log("{GRY}  [R12+0x%03llx] %016llx -> %016llx (%s){RESET}\n",
+            I * sizeof(uint64_t), VmContextSnapshotValid ? VmContextWords[I] : 0, Current[I],
+            DescribeVmContextValue(Current[I]).c_str());
+        ++VmContextChangeLogCount;
+    }
+
+    memcpy(VmContextWords, Current, sizeof(Current));
+    VmContextBase = ContextBase;
+    VmContextSnapshotValid = true;
+}
 void UnicornEmu::Hooks::OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
     FocusedTraceCount++;
     if (FocusedTraceCount > FocusedTraceMax)
@@ -240,37 +300,62 @@ void UnicornEmu::Hooks::OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Si
     Logger::Log("{GRY}  RSP=%016llx RBP=%016llx R8=%016llx R9=%016llx R10=%016llx R11=%016llx{RESET}\n",
         Rsp, Rbp, R8, R9, R10, R11);
 
-    if (Addr == DRIVER_BASE_UC + 0x11c93) {
-        Logger::Log("{RED}  *** FAULT POINT REACHED *** RSI=0x%llx (reading [RSI+0xE0]=0x%llx){RESET}\n", Rsi, Rsi + 0xE0);
+    if (Addr == DRIVER_BASE_UC + 0x2680F00) {
+        Logger::Log("{RED}  *** VM LOOP REACHED ***{RESET}\n");
         Logger::Log("{GRY}  R12=%016llx R13=%016llx R14=%016llx R15=%016llx{RESET}\n", R12, R13, R14, R15);
-
-        uint64_t CtxPtr = 0;
-        uc_mem_read(Uc, R12 + 0x18, &CtxPtr, 8);
-        Logger::Log("{GRY}  [R12+0x18] (ctx ptr) = 0x%016llx{RESET}\n", CtxPtr);
-        if (CtxPtr) {
-            Logger::Log("{GRY}  Structure at 0x%016llx:{RESET}\n", CtxPtr);
-            for (int I = 0; I < 32; I++) {
-                uint64_t V = 0;
-                uc_mem_read(Uc, CtxPtr + I * 8, &V, 8);
-                Logger::Log("{GRY}    [ctx+0x%03x] = 0x%016llx{RESET}\n", I * 8, V);
-            }
-        }
-
-        Logger::Log("{GRY}  Full R12 context dump (non-zero):{RESET}\n");
-        for (int I = 0; I < 80; I++) {
-            uint64_t V = 0;
-            uc_mem_read(Uc, R12 + I * 8, &V, 8);
-            if (V != 0)
-                Logger::Log("{GRY}    [R12+0x%03x] = 0x%016llx{RESET}\n", I * 8, V);
-        }
+        LogVmContextDelta(Uc, R12);
+    }
+    else if (Addr == DRIVER_BASE_UC + 0x11c93) {
+        Logger::Log("{RED}  *** FAULT POINT REACHED *** RSI=0x%llx (reading [RSI+0xE0]=0x%llx){RESET}\n",
+            Rsi, Rsi + 0xE0);
     }
 }
 
 void UnicornEmu::InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End) {
     FocusedTraceCount = 0;
+    VmContextBase = 0;
+    VmContextSnapshotValid = false;
+    VmContextChangeLogCount = 0;
     uc_hook Hh;
     uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnFocusedTrace, nullptr, Start, End);
     Logger::Log("{CYN}Focused trace installed: 0x%llx - 0x%llx{RESET}\n", Start, End);
+}
+
+static uint64_t VmStepTrigger = 0;
+static uint32_t VmStepRemaining = 0;
+static bool VmStepCaptured = false;
+
+void UnicornEmu::Hooks::OnVmStepTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    if (!VmStepCaptured) {
+        if (Addr != VmStepTrigger)
+            return;
+
+        VmStepCaptured = true;
+        Logger::Log("{CYN}[VM STEP TRACE] triggered at 0x%llx{RESET}\n", Addr);
+    }
+
+    if (VmStepRemaining == 0)
+        return;
+
+    Logger::Log("{CYN}[VM STEP %u] 0x%llx: %s{RESET}\n",
+        VmStepRemaining, Addr, UnicornEmu::DisassembleAt(Uc, Addr).c_str());
+    --VmStepRemaining;
+}
+
+void UnicornEmu::InstallVmStepTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize,
+    uint64_t Trigger, uint32_t Steps) {
+    VmStepTrigger = Trigger;
+    VmStepRemaining = Steps;
+    VmStepCaptured = false;
+
+    uc_hook Hh;
+    const uc_err Err = uc_hook_add(Uc, &Hh, UC_HOOK_CODE,
+        (void*)Hooks::OnVmStepTrace, nullptr, DriverBase, DriverBase + DriverSize - 1);
+    if (Err == UC_ERR_OK) {
+        Logger::Log("{CYN}VM step trace armed: trigger=0x%llx steps=%u{RESET}\n", Trigger, Steps);
+    } else {
+        Logger::Log("{RED}VM step trace failed: %s{RESET}\n", uc_strerror(Err));
+    }
 }
 
 static uint64_t StackWatchBase = 0;
@@ -283,6 +368,7 @@ void UnicornEmu::Hooks::OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t A
 
     StackWriteCount++;
     if (StackWriteCount > 10000)
+
         return;
 
     uint64_t Rip = 0;
@@ -292,6 +378,43 @@ void UnicornEmu::Hooks::OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t A
     std::string Disasm = UnicornEmu::DisassembleAt(Uc, Rip);
     Logger::Log("{GRY}[STACK WRITE] addr=0x%llx (watch+0x%llx) size=%d val=0x%llx RIP=0x%llx: %s{RESET}\n",
         Addr, Offset, Size, (uint64_t)Value, Rip, Disasm.c_str());
+}
+
+
+static uint64_t ProtectedCodeWatchBase = 0;
+static uint64_t ProtectedCodeWatchEnd = 0;
+static int ProtectedCodeWriteCount = 0;
+
+void UnicornEmu::Hooks::OnProtectedCodeWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData) {
+    if (Addr < ProtectedCodeWatchBase || Addr >= ProtectedCodeWatchEnd)
+        return;
+
+    ++ProtectedCodeWriteCount;
+    if (ProtectedCodeWriteCount > 256)
+        return;
+
+    uint64_t Rip = 0;
+    uc_reg_read(Uc, UC_X86_REG_RIP, &Rip);
+
+    Logger::Log("{MAG}[PROTECTED CODE WRITE %d] addr=0x%llx (drv+0x%llx) size=%d value=0x%llx RIP=0x%llx (drv+0x%llx): %s{RESET}\n",
+        ProtectedCodeWriteCount, Addr, Addr - DRIVER_BASE_UC, Size, (uint64_t)Value,
+        Rip, Rip - DRIVER_BASE_UC, UnicornEmu::DisassembleAt(Uc, Rip).c_str());
+}
+
+void UnicornEmu::InstallProtectedCodeWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize) {
+    ProtectedCodeWatchBase = WatchAddr;
+    ProtectedCodeWatchEnd = WatchAddr + WatchSize;
+    ProtectedCodeWriteCount = 0;
+
+    uc_hook Hh;
+    const uc_err Err = uc_hook_add(Uc, &Hh, UC_HOOK_MEM_WRITE,
+        (void*)Hooks::OnProtectedCodeWrite, nullptr, WatchAddr, ProtectedCodeWatchEnd - 1);
+    if (Err == UC_ERR_OK) {
+        Logger::Log("{CYN}Protected code write watchpoint: 0x%llx - 0x%llx{RESET}\n",
+            WatchAddr, ProtectedCodeWatchEnd - 1);
+    } else {
+        Logger::Log("{RED}Protected code write watchpoint failed: %s{RESET}\n", uc_strerror(Err));
+    }
 }
 
 void UnicornEmu::InstallStackWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize) {

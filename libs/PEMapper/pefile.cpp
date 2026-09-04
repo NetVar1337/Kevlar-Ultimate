@@ -2,6 +2,101 @@
 #include <Logger/Logger.h>
 #include <SymParser\symparser.hpp>
 #include "../../KEVLAR/config.h"
+#include <algorithm>
+#include <vector>
+
+namespace {
+
+bool IsFileRangeValid(size_t Offset, size_t Length, size_t FileSize) {
+    return Offset <= FileSize && Length <= FileSize - Offset;
+}
+
+unsigned char* MapRawPeImage(const std::string& Filename) {
+    const auto Fail = [&](const char* Reason) {
+        Logger::Log("{RED}Raw PE map failed for %s: %s{RESET}\n", Filename.c_str(), Reason);
+        return static_cast<unsigned char*>(nullptr);
+    };
+
+    std::ifstream RawFile(Filename, std::ios::binary | std::ios::ate);
+    if (!RawFile)
+        return Fail("open");
+
+    const auto RawSize = RawFile.tellg();
+    if (RawSize <= 0 || static_cast<uintmax_t>(RawSize) > SIZE_MAX)
+        return Fail("file size");
+
+    std::vector<unsigned char> Raw(static_cast<size_t>(RawSize));
+    RawFile.seekg(0);
+    if (!RawFile.read(reinterpret_cast<char*>(Raw.data()), RawSize))
+        return Fail("read");
+
+    if (Raw.size() < sizeof(IMAGE_DOS_HEADER))
+        return Fail("DOS header");
+
+    const auto Dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(Raw.data());
+    if (Dos->e_magic != IMAGE_DOS_SIGNATURE || Dos->e_lfanew < 0)
+        return Fail("DOS signature");
+
+    const auto NtOffset = static_cast<size_t>(Dos->e_lfanew);
+    if (!IsFileRangeValid(NtOffset, sizeof(IMAGE_NT_HEADERS64), Raw.size()))
+        return Fail("NT header range");
+
+    const auto Nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(Raw.data() + NtOffset);
+    if (Nt->Signature != IMAGE_NT_SIGNATURE
+        || Nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
+        || Nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || Nt->OptionalHeader.SizeOfImage == 0)
+        return Fail("NT header");
+
+    const auto ImageSize = static_cast<size_t>(Nt->OptionalHeader.SizeOfImage);
+    if (ImageSize > SIZE_MAX)
+        return Fail("image size");
+
+    const auto SectionOffset = NtOffset + FIELD_OFFSET(IMAGE_NT_HEADERS64, OptionalHeader)
+        + Nt->FileHeader.SizeOfOptionalHeader;
+    if (SectionOffset < NtOffset
+        || Nt->FileHeader.NumberOfSections > (Raw.size() - (std::min)(SectionOffset, Raw.size())) / sizeof(IMAGE_SECTION_HEADER)
+        || !IsFileRangeValid(SectionOffset,
+            static_cast<size_t>(Nt->FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER), Raw.size()))
+        return Fail("section table");
+
+    auto Image = static_cast<unsigned char*>(
+        VirtualAlloc(nullptr, ImageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    if (!Image)
+        return Fail("allocation");
+
+    const auto HeaderSize = (std::min)((std::min)(static_cast<size_t>(Nt->OptionalHeader.SizeOfHeaders), Raw.size()), ImageSize);
+    memcpy(Image, Raw.data(), HeaderSize);
+
+    const auto Sections = reinterpret_cast<const IMAGE_SECTION_HEADER*>(Raw.data() + SectionOffset);
+    for (uint16_t I = 0; I < Nt->FileHeader.NumberOfSections; ++I) {
+        const auto& Section = Sections[I];
+        const auto SectionSize = (std::max)(Section.Misc.VirtualSize, Section.SizeOfRawData);
+        if (Section.VirtualAddress > ImageSize || SectionSize > ImageSize - Section.VirtualAddress) {
+            VirtualFree(Image, 0, MEM_RELEASE);
+            return Fail("section virtual range");
+        }
+
+        const auto AvailableRaw = Section.PointerToRawData < Raw.size()
+            ? (std::min)(static_cast<size_t>(Section.SizeOfRawData), Raw.size() - Section.PointerToRawData)
+            : 0;
+        if (AvailableRaw < Section.SizeOfRawData)
+            Logger::Log("{YEL}Raw PE map: section %u is truncated; zero-filling 0x%llx bytes{RESET}\n",
+                I, static_cast<uint64_t>(Section.SizeOfRawData) - AvailableRaw);
+        if (AvailableRaw)
+            memcpy(Image + Section.VirtualAddress, Raw.data() + Section.PointerToRawData, AvailableRaw);
+    }
+
+    return Image;
+}
+
+
+} // namespace
+bool PEFile::IsRawMapped() const {
+    return raw_mapped;
+}
+
+
 
 std::unordered_map<std::string, PEFile*> PEFile::moduleList_namekey;
 std::vector<PEFile*> PEFile::LoadedModuleArray;
@@ -159,21 +254,28 @@ void PEFile::ParseExport() {
 }
 
 PEFile::PEFile(std::string filename, std::string name, uintmax_t size) {
-    if (size) {
+    if (!size)
+        return;
 
-        mapped_buffer = (unsigned char*)LoadLibraryExA(filename.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES);
-        if (mapped_buffer) {
-
-            this->isExecutable = false;
-            this->filename = filename;
-            this->name = name;
-
-            ParseHeader();
-            ParseSection();
-            ParseImport();
-            ParseExport();
+    mapped_buffer = (unsigned char*)LoadLibraryExA(filename.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES);
+    if (!mapped_buffer) {
+        mapped_buffer = MapRawPeImage(filename);
+        raw_mapped = true;
+        if (!mapped_buffer) {
+            Logger::Log("{RED}Failed to map PE image: %s{RESET}\n", filename.c_str());
+            return;
         }
+        Logger::Log("{YEL}LoadLibraryExA rejected %s; using bounded raw PE mapping{RESET}\n", filename.c_str());
     }
+
+    this->isExecutable = false;
+    this->filename = filename;
+    this->name = name;
+
+    ParseHeader();
+    ParseSection();
+    ParseImport();
+    ParseExport();
 }
 
 void PEFile::ResolveImport() {
@@ -247,6 +349,8 @@ void PEFile::ResolveImport() {
 uint64_t PEFile::GetImageBase() { return imagebase; }
 
 uint64_t PEFile::GetMappedImageBase() { return (uint64_t)mapped_buffer; }
+bool PEFile::IsMapped() const { return mapped_buffer != nullptr; }
+
 
 uint64_t PEFile::GetVirtualSize() { return virtual_size; }
 
@@ -352,6 +456,10 @@ PEFile* PEFile::Open(std::string path, std::string name) {
     }
 
     auto loadedModule = new PEFile(path, name, size);
+    if (!loadedModule->IsMapped()) {
+        delete loadedModule;
+        return nullptr;
+    }
     loadedModule->isExecutable = false;
     LoadedModuleArray.push_back(loadedModule);
 

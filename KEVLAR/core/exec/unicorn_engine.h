@@ -29,7 +29,7 @@
 #define HYPERSPACE_SIZE_UC    0x200000ULL
 #define GDT_BASE_UC           0xFFFFF70000100000ULL
 #define IDT_BASE_UC           0xFFFFF70000101000ULL
-#define SYSMOD_BASE_UC        0xFFFFF80300000000ULL
+#define SYSMOD_BASE_UC        0xFFFFF80374000000ULL
 #define USERMODE_MAPPING_BASE 0x0000000010000000ULL
 #define SENTINEL_RET_ADDR     0xDEADC0DE00000000ULL
 #define SENTINEL_RANGE_SIZE   0x100000ULL
@@ -145,7 +145,9 @@ void OnRdmsr(uc_engine* Uc, void* UserData);
 void OnWrmsr(uc_engine* Uc, void* UserData);
 void OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+void OnVmStepTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
+void OnProtectedCodeWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
 void OnDivWatch(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnSseAlignCheck(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnVmEnter(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
@@ -177,6 +179,7 @@ extern bool StrictExportsEnabled;
 extern bool ProvenanceEnabled;
 extern std::string TraceRecordPath;
 extern std::string TraceCheckPath;
+extern uint64_t ExecutionInstructionLimit;
 
 void UpdateKusdTimeValues();
 
@@ -188,6 +191,8 @@ void InstallDivWatch(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallSseAlignCheck(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End);
 void InstallStackWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
+void InstallProtectedCodeWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
+void InstallVmStepTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize, uint64_t Trigger, uint32_t Steps);
 void InitMsrStore();
 void InstallWatchpoints(uc_engine* Uc);
 

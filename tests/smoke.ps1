@@ -41,6 +41,21 @@ if ($fail.Count) {
 $ret = ($out -split "`n") | Where-Object { $_ -match "DriverEntry returned:" }
 Write-Host "SMOKE PASS - $($ret.Trim())" -ForegroundColor Green
 
+# Regression: a native driver can contain imports outside the user-mode loader
+# namespace; KEVLAR must still map and execute a self-contained DriverEntry.
+$manualDrv = Join-Path $PSScriptRoot "manual_map_driver.sys"
+$manualLog = Join-Path $env:TEMP "kevlar_manual_map.log"
+& python (Join-Path $PSScriptRoot "make_test_driver.py") $manualDrv --manual-map-only | Out-Host
+if ($LASTEXITCODE) { throw "manual-map test driver generation failed" }
+
+& $exe $manualDrv --no-pause 2>&1 | Tee-Object -FilePath $manualLog | Out-Null
+$manualOut = Get-Content $manualLog -Raw
+if (($manualOut -notmatch "DriverEntry completed successfully") -or ($manualOut -match "KEVLAR HOST CRASH")) {
+    Write-Host "MANUAL-MAP SMOKE FAIL" -ForegroundColor Red
+    exit 1
+}
+Write-Host "MANUAL-MAP SMOKE PASS" -ForegroundColor Green
+
 # ke_* semantics self-test (IRQL / APC / DPC / timer) -- no driver needed.
 Write-Host "Running KEVLAR --selftest..."
 $stLog = Join-Path $env:TEMP "kevlar_selftest.log"

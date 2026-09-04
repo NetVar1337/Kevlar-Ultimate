@@ -31,5 +31,6 @@ uint64_t HostToUc(void* HostPtr);
 bool IsTracked(uint64_t UcAddr);
 void TrackExisting(uint64_t UcAddr, void* HostPtr, uint64_t Size, const char* Name);
 bool FindAllocation(uint64_t UcAddr, uint64_t& OutBase, void*& OutHost, uint64_t& OutSize);
+std::string GetAllocationName(uint64_t UcAddr);
 
 }

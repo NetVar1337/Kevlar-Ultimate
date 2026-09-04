@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "sample": {
+    "path": "EACDUMP62326.sys",
+    "sha256": "11BE303F376EB7DB2EDEF8236BD58D3AD6EA7E4BC500937032BE680236AFB629",
+    "file_size": 42917888,
+    "signature": "NotSigned",
+    "parse_status": "bounded_raw_mapping",
+    "parse_note": "The final PE section is truncated by 0x1000 bytes; Kevlar zero-fills that region. llvm-objdump rejects the raw file as unexpectedly truncated."
+  },
+  "image": {
+    "preferred_base": "0xfffff80329fa0000",
+    "emulated_base": "0xfffff80100000000",
+    "virtual_size": "0x28ef000",
+    "entry_rva": "0x255178",
+    "import_count": 0,
+    "import_resolution": "none",
+    "interpretation": "The raw image has no conventional import table; initialization is self-contained or resolves kernel services dynamically."
+  },
+  "initialization_trace": {
+    "instruction_limit": 250000,
+    "executed_records": 249014,
+    "unique_rvas": 22372,
+    "api_events": 0,
+    "entry_first_rvas": ["0x255178", "0x25517d", "0x25517e", "0x255182", "0x255185", "0x255188"],
+    "limit_rip_rva": "0x2681f76",
+    "tail_rvas": ["0x2681f1c", "0x2681f23", "0x2681f2b", "0x2681f32", "0x2681f3a", "0x2681f41", "0x2681f49", "0x2681f50", "0x2681f58", "0x2681f5f", "0x2681f67", "0x2681f6e"],
+    "hot_rvas": [
+      {"rva": "0x35c486", "executions": 225},
+      {"rva": "0x35c48b", "executions": 225},
+      {"rva": "0x35c48f", "executions": 225},
+      {"rva": "0x35c493", "executions": 225},
+      {"rva": "0x35c496", "executions": 225}
+    ],
+    "status": "instruction_limit_reached_before_DriverEntry_return"
+  },
+  "observed_interfaces": {
+    "driver_object_reads": ["DriverSize", "DriverStart"],
+    "kuser_shared_data_reads": ["0x14"],
+    "registered_callbacks": [],
+    "created_devices": [],
+    "spawned_threads": []
+  },
+  "vtil_artifacts": [
+    {"rva": "0x2680f00", "size": "0x10", "path": "eac-2680f00.vtil", "bytes": 11223},
+    {"rva": "0x2681f00", "size": "0x20", "path": "eac-entry-tail.vtil", "bytes": 3800},
+    {"rva": "0x2680d30", "size": "0x20", "path": "eac-replayed-state.vtil", "bytes": 1814}
+  ],
+  "continuation_trace": {
+    "instruction_limit": 1000000,
+    "executed_records": 999014,
+    "unique_rvas": 22372,
+    "api_events": 0,
+    "resolver_events": 0,
+    "kernel_rips": 0,
+    "limit_rip_rva": "0x2681dfe",
+    "tail_rvas": ["0x2681db1", "0x2681db4", "0x2681dbe", "0x2681dc1", "0x2681dc4", "0x2681dc7", "0x2681dca", "0x2681dce", "0x2681dd3", "0x2681dd6", "0x2681dd9", "0x2681ddc", "0x2681de6", "0x2681de9", "0x2681df1", "0x2681df4"],
+    "status": "same_22372_driver_rvas_replayed_without_kernel_transition"
+  },
+  "next_boundary": "The first one million instructions replay the same 22,372 driver RVAs without reaching a dynamic export resolver, API sentinel, callback registration, device creation, or worker creation. The next analysis target is the in-driver state machine spanning 0x2680d32 through 0x2681dfe, not a missing synthetic kernel export."
+}

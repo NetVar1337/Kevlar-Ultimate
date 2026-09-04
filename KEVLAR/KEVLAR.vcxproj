@@ -194,6 +194,7 @@
     <ClCompile Include="core\exec\insn_avx_ext.cpp" />
     <ClCompile Include="core\exception\seh_dispatch.cpp" />
     <ClCompile Include="core\diagnostics\diag_center.cpp" />
+    <ClCompile Include="core\devirt\vtil_analysis.cpp" />
     <ClCompile Include="core\io\io_manager.cpp" />
     <ClCompile Include="core\io\irp_ioctl.cpp" />
     <ClCompile Include="core\io\irp_readwrite.cpp" />
@@ -246,6 +247,7 @@
     <ClInclude Include="core\exec\timing_spoof.h" />
     <ClInclude Include="core\exec\cpu_profile.h" />
     <ClInclude Include="core\exception\seh_dispatch.h" />
+    <ClInclude Include="core\devirt\vtil_analysis.h" />
     <ClInclude Include="core\diagnostics\diag_center.h" />
     <ClInclude Include="core\io\io_manager.h" />
     <ClInclude Include="core\io\irp_dispatch.h" />

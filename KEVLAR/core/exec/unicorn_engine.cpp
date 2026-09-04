@@ -22,6 +22,7 @@ bool UnicornEmu::StrictExportsEnabled = false;
 bool UnicornEmu::ProvenanceEnabled = false;
 std::string UnicornEmu::TraceRecordPath;
 std::string UnicornEmu::TraceCheckPath;
+uint64_t UnicornEmu::ExecutionInstructionLimit = 0;
 
 namespace UnicornEmu {
     uc_engine* PrimaryEngine = nullptr;

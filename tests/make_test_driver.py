@@ -35,7 +35,7 @@ def align(v, a):
     return (v + a - 1) & ~(a - 1)
 
 
-def import_table():
+def import_table(library):
     """A single import of ntoskrnl.exe!KeInitializeSpinLock.
 
     RVA base 0x1100: IID @ +0x00, name @ +0x14, IAT @ +0x28, OFT @ +0x38,
@@ -46,7 +46,7 @@ def import_table():
     out = bytearray()
     out += struct.pack("<IIIII", base + 0x38, 0, 0, base + 0x14, base + 0x28)  # IID
     assert len(out) == 20
-    out += b"ntoskrnl.exe\x00"             # +0x14 (13 bytes, ends at +0x21)
+    out += library.encode("ascii") + b"\x00"          # +0x14 (13 bytes, ends at +0x21)
     out += b"\x00" * (0x28 - len(out))     # align IAT thunk to +0x28
     out += struct.pack("<QQ", 0, 0)        # +0x28 IAT thunk
     out += struct.pack("<QQ", base + 0x48, 0)  # +0x38 OFT thunk -> ImportByName
@@ -56,7 +56,7 @@ def import_table():
     return out
 
 
-def build_driver(with_import=False):
+def build_driver(import_library=None):
     # --- code at RVA 0x1000: KPCR.Self via GS, conditional branch, STATUS_SUCCESS ---
     #   0x1000: sub rsp, 0x28
     #   0x1004: mov rax, qword ptr gs:[0x20]     ; KPCR.Self
@@ -94,9 +94,9 @@ def build_driver(with_import=False):
     code += fail
 
     data = bytearray(code)
-    if with_import:
+    if import_library:
         data += b"\x00" * (0x100 - len(data))  # pad to the import table RVA
-        data += import_table()
+        data += import_table(import_library)
     raw_size = align(len(data), FILE_ALIGN)
     data += b"\x00" * (raw_size - len(data))
     size_of_image = align(SECTION_RVA + raw_size, 0x1000)
@@ -134,7 +134,7 @@ def build_driver(with_import=False):
     o += struct.pack("<I", 0)                        # LoaderFlags
     o += struct.pack("<I", 16)                       # NumberOfRvaAndSizes
     assert len(o) == 0x70, f"optional header prefix {len(o)} != 112"
-    import_dir = (SECTION_RVA + 0x100, 0x60) if with_import else (0, 0)
+    import_dir = (SECTION_RVA + 0x100, 0x60) if import_library else (0, 0)
     for i in range(16):
         o += struct.pack("<II", *import_dir) if i == 1 else struct.pack("<II", 0, 0)
     assert len(o) == 0xF0, f"optional header {len(o)} != 240"
@@ -163,11 +163,14 @@ def verify_load(path):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "test_driver.sys"
-    image = build_driver(with_import="--with-import" in sys.argv)
+    import_library = "missingx.sys" if "--manual-map-only" in sys.argv else (
+        "ntoskrnl.exe" if "--with-import" in sys.argv else None
+    )
+    image = build_driver(import_library)
     with open(out, "wb") as f:
         f.write(image)
     print(f"wrote {out} ({len(image)} bytes)"
-          + (" [with ntoskrnl import]" if "--with-import" in sys.argv else ""))
+          + (f" [with {import_library} import]" if import_library else ""))
     if "--verify" in sys.argv:
         verify_load(out)
 

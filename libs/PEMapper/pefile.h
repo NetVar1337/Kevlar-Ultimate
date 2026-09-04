@@ -61,6 +61,7 @@ private:
     uintmax_t entrypoint = 0;
 
     bool isExecutable = false;
+    bool raw_mapped = false;
 
     void ParseHeader();
     void ParseSection();
@@ -93,6 +94,8 @@ public:
     void CreateShadowBuffer();
     uint64_t GetMappedImageBase();
     uintptr_t GetShadowBuffer();
+    bool IsMapped() const;
+    bool IsRawMapped() const;
     uintmax_t GetEP();
     void SetExecutable(bool isExecutable);
     std::unordered_map<uint64_t, std::string> GetAllExports();

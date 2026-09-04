@@ -232,15 +232,27 @@ void Environment::InitializeSystemModules() {
             HostEntry->InLoadOrderLinks.Blink = (LIST_ENTRY*)PrevLinksUc;
         }
 
-        PsLoadedModuleList = (PKLDR_DATA_TABLE_ENTRY)UcLdrAddrs[0];
-
+        uint64_t HeadLdrUc = UcLdrAddrs[0];
         for (size_t I = 0; I < Entries.size(); I++) {
             auto& BaseName = Entries[I].BaseDllNameStr;
             if (BaseName.find(L"ntoskrnl") != std::wstring::npos) {
-                PsLoadedModuleList = (PKLDR_DATA_TABLE_ENTRY)UcLdrAddrs[I];
+                HeadLdrUc = UcLdrAddrs[I];
                 break;
             }
         }
+
+        uint64_t SentinelUc = UnicornMem::AllocateVariable(
+            UnicornEmu::PrimaryEngine, sizeof(LIST_ENTRY), "PsLoadedModuleList");
+        auto SentinelHost = (LIST_ENTRY*)UnicornMem::UcToHost(SentinelUc);
+        auto HeadHost = (LIST_ENTRY*)UnicornMem::UcToHost(HeadLdrUc);
+        uint64_t LastLdrUc = (uint64_t)HeadHost->Blink;
+        auto LastHost = (LIST_ENTRY*)UnicornMem::UcToHost(LastLdrUc);
+
+        SentinelHost->Flink = (LIST_ENTRY*)HeadLdrUc;
+        SentinelHost->Blink = (LIST_ENTRY*)LastLdrUc;
+        HeadHost->Blink = (LIST_ENTRY*)SentinelUc;
+        LastHost->Flink = (LIST_ENTRY*)SentinelUc;
+        PsLoadedModuleList = (PKLDR_DATA_TABLE_ENTRY)SentinelUc;
     }
 
 }

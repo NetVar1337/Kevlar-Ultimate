@@ -252,6 +252,22 @@ bool UnicornMem::FindAllocation(uint64_t UcAddr, uint64_t& OutBase, void*& OutHo
     return false;
 }
 
+std::string UnicornMem::GetAllocationName(uint64_t UcAddr) {
+    std::shared_lock<std::shared_mutex> Guard(PoolLock);
+
+    for (const auto& Entry : UcToHostMap) {
+        const uint64_t Base = Entry.first;
+        const auto SizeIt = PoolSizes.find(Base);
+        if (SizeIt == PoolSizes.end() || UcAddr < Base || UcAddr >= Base + SizeIt->second)
+            continue;
+
+        const auto NameIt = PoolNames.find(Base);
+        return NameIt != PoolNames.end() ? NameIt->second : "unnamed";
+    }
+
+    return {};
+}
+
 uint64_t UnicornMem::AllocateUsermode(uc_engine* Uc, uint64_t Size, void* HostBuf) {
     std::unique_lock<std::shared_mutex> Guard(PoolLock);
 

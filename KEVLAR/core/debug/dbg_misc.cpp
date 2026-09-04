@@ -24,7 +24,7 @@ static void FillDbgkdVersion(uint8_t* Out) {
     *(uint32_t*)(Out + 0x18) = 0x0000000D;              // MaxStateChange
     *(uint32_t*)(Out + 0x1C) = 0x0000000E;              // MaxManipulate
     *(uint32_t*)(Out + 0x20) = 0x00000000;              // Simulation
-    *(uint64_t*)(Out + 0x30) = 0xFFFFF80300000000ULL;   // KernBase (ntoskrnl)
+    *(uint64_t*)(Out + 0x30) = 0xFFFFF80374000000ULL;   // KernBase (ntoskrnl)
 }
 
 NTSTATUS h_KdSystemDebugControl(int Command, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength, PULONG ReturnLength,

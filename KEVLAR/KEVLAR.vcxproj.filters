@@ -13,6 +13,9 @@
     <Filter Include="core\diagnostics">
       <UniqueIdentifier>{a0000001-0000-0000-0000-00000000000e}</UniqueIdentifier>
     </Filter>
+    <Filter Include="core\devirt">
+      <UniqueIdentifier>{a0000001-0000-0000-0000-00000000000f}</UniqueIdentifier>
+    </Filter>
     <Filter Include="core\io">
       <UniqueIdentifier>{a0000001-0000-0000-0000-000000000004}</UniqueIdentifier>
     </Filter>
@@ -134,6 +137,9 @@
     </ClCompile>
     <ClCompile Include="core\diagnostics\diag_center.cpp">
       <Filter>core\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="core\devirt\vtil_analysis.cpp">
+      <Filter>core\devirt</Filter>
     </ClCompile>
     <ClCompile Include="core\io\io_manager.cpp">
       <Filter>core\io</Filter>
@@ -301,6 +307,9 @@
     </ClInclude>
     <ClInclude Include="core\object\handle_manager.h">
       <Filter>core\object</Filter>
+    </ClInclude>
+    <ClInclude Include="core\devirt\vtil_analysis.h">
+      <Filter>core\devirt</Filter>
     </ClInclude>
     <ClInclude Include="core\process\unicorn_threading.h">
       <Filter>core\process</Filter>

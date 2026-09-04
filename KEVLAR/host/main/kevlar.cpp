@@ -7,6 +7,7 @@
 #include <malloc.h>
 #include <mutex>
 #include <thread>
+#include <cstdio>
 #include <atomic>
 
 #include <PEMapper/pefile.h>
@@ -27,6 +28,7 @@
 #include "host/providers/provider.h"
 #include "core/registry/virtual_fs.h"
 #include "core/diagnostics/diag_center.h"
+#include "core/devirt/vtil_analysis.h"
 #include "api/io/io_device.h"
 #include "api/ke/ke_misc.h"
 #include "api/ke/ke_sync.h"
@@ -234,6 +236,10 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --trace <file>          Record deterministic execution trace{RESET}\n");
         Logger::Log("  --check <file>          Replay trace; report first divergence{RESET}\n");
         Logger::Log("  --no-pause              Skip final pause; exit ~5s after a no-thread run (automation){RESET}\n");
+        Logger::Log("  --vtil-rva <rva>        Lift a bounded AMD64 region into optimized VTIL{RESET}\n");
+        Logger::Log("  --vtil-size <bytes>     Bytes available to the VTIL lifter (default: 0x5000){RESET}\n");
+        Logger::Log("  --vtil-out <file>       VTIL serialization path (default: executable directory){RESET}\n");
+        Logger::Log("  --max-insns <n>         Stop DriverEntry after n instructions and report RIP{RESET}\n");
         Logger::Log("  --selftest              Run the ke_* semantics self-test and exit (no driver){RESET}\n");
     };
 
@@ -268,6 +274,10 @@ int main(int Argc, char* Argv[]) {
     Logger::Log("{CYN}Loading driver module{RESET}\n");
 
     std::string DriverPath;
+    uint64_t VtilRva = 0;
+    uint64_t VtilSize = 0x5000;
+    std::string VtilOutputPath;
+    bool VtilRequested = false;
 
     for (int I = 1; I < Argc; I++) {
         std::string Arg = Argv[I];
@@ -302,6 +312,35 @@ int main(int Argc, char* Argv[]) {
             } else if (Arg == "--strict-exports") {
                 UnicornEmu::StrictExportsEnabled = true;
                 Logger::Log("{CYN}Strict exports ENABLED (unhandled -> STATUS_NOT_IMPLEMENTED){RESET}\n");
+            } else if (Arg.rfind("--vtil-rva", 0) == 0) {
+                std::string Val = (Arg.size() > 10 && Arg[10] == '=')
+                    ? Arg.substr(11) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--vtil-rva requires an RVA{RESET}\n");
+                    return 1;
+                }
+                VtilRva = strtoull(Val.c_str(), nullptr, 0);
+                VtilRequested = true;
+            } else if (Arg.rfind("--vtil-size", 0) == 0) {
+                std::string Val = (Arg.size() > 11 && Arg[11] == '=')
+                    ? Arg.substr(12) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--vtil-size requires a byte count{RESET}\n");
+                    return 1;
+                }
+                VtilSize = strtoull(Val.c_str(), nullptr, 0);
+                if (!VtilSize) {
+                    Logger::Log("{RED}--vtil-size must be greater than zero{RESET}\n");
+                    return 1;
+                }
+            } else if (Arg.rfind("--vtil-out", 0) == 0) {
+                std::string Val = (Arg.size() > 10 && Arg[10] == '=')
+                    ? Arg.substr(11) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--vtil-out requires a file path{RESET}\n");
+                    return 1;
+                }
+                VtilOutputPath = std::move(Val);
             } else if (Arg == "--provenance") {
                 UnicornEmu::ProvenanceEnabled = true;
                 if (!DiagCenter::Instance().IsEnabled())
@@ -327,6 +366,22 @@ int main(int Argc, char* Argv[]) {
                 }
             } else if (Arg == "--no-pause") {
                 NoPause = true;
+            } else if (Arg.rfind("--max-insns", 0) == 0) {
+                std::string Val = (Arg.size() > 11 && Arg[11] == '=')
+                    ? Arg.substr(12) : (I + 1 < Argc ? Argv[++I] : "");
+                if (!Val.empty()) {
+                    UnicornEmu::ExecutionInstructionLimit = strtoull(Val.c_str(), nullptr, 0);
+                    if (UnicornEmu::ExecutionInstructionLimit) {
+                        Logger::Log("{CYN}DriverEntry instruction limit: %llu{RESET}\n",
+                            UnicornEmu::ExecutionInstructionLimit);
+                    } else {
+                        Logger::Log("{RED}--max-insns must be greater than zero{RESET}\n");
+                        return 1;
+                    }
+                } else {
+                    Logger::Log("{RED}--max-insns requires a value{RESET}\n");
+                    return 1;
+                }
             } else if (Arg == "--selftest") {
                 SelfTest = true;
             } else if (Arg == "--pause")
@@ -381,6 +436,27 @@ int main(int Argc, char* Argv[]) {
     }
     Logger::Log("{GRN}File opened. {GRY}MappedBase={WHT}0x%llx {GRY}VirtSize={WHT}0x%llx {GRY}EP={WHT}0x%llx{RESET}\n",
         MainModule->GetMappedImageBase(), MainModule->GetVirtualSize(), MainModule->GetEP());
+    if (VtilRequested) {
+        if (VtilOutputPath.empty()) {
+            char FileName[64];
+            snprintf(FileName, sizeof(FileName), "vtil-rva-%llx.vtil", VtilRva);
+            VtilOutputPath = KevlarGlobal::ExeDir + FileName;
+        }
+
+        const VtilAnalysis::Options VtilOptions = {
+            .Rva = VtilRva,
+            .Size = VtilSize,
+            .InputPath = DriverPath,
+            .OutputPath = VtilOutputPath,
+        };
+        if (!VtilAnalysis::LiftImageRegion(
+                (const uint8_t*)MainModule->GetMappedImageBase(),
+                (size_t)MainModule->GetVirtualSize(),
+                VtilOptions)) {
+            return 1;
+        }
+        return 0;
+    }
 
     {
         std::string Fname = DriverPath;
@@ -507,8 +583,16 @@ int main(int Argc, char* Argv[]) {
         UnicornEmu::InstallTraceCapture(UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());
     }
 
-    //UnicornEmu::InstallFocusedTrace(UnicornEmu::PrimaryEngine,
-    //    DRIVER_BASE_UC + 0x11000, DRIVER_BASE_UC + 0x12FFF);
+    if (UnicornEmu::DevirtualizationTest) {
+        UnicornEmu::InstallFocusedTrace(UnicornEmu::PrimaryEngine,
+            DRIVER_BASE_UC + 0x2680F00, DRIVER_BASE_UC + 0x2680F00);
+        UnicornEmu::InstallVmStepTrace(UnicornEmu::PrimaryEngine,
+            DRIVER_BASE_UC, MainModule->GetVirtualSize(), DRIVER_BASE_UC + 0x2680F00, 1024);
+        constexpr uint64_t kLoopRva = 0x2680000;
+        constexpr uint64_t kLoopSpan = 0x5000;
+        UnicornEmu::InstallProtectedCodeWriteWatch(UnicornEmu::PrimaryEngine,
+            DRIVER_BASE_UC + kLoopRva, kLoopSpan);
+    }
 
     //UnicornEmu::InstallStackWriteWatch(UnicornEmu::PrimaryEngine,
     //    STACK_BASE_UC + 0x3FC80, 0x80);

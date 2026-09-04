@@ -1,6 +1,7 @@
 #include "include/common.h"
 #include "include/kernel_layout_consume.h"
 #include "ke_misc.h"
+#include "core/exec/cpu_profile.h"
 
 _ETHREAD* h_KeGetCurrentThread() { return UnicornThread::GetCurrentEthread(); }
 
@@ -460,10 +461,7 @@ BOOLEAN h_KeAlertThread(void* Thread, uint8_t AlertMode) {
 }
 
 uint64_t h_KeQueryActiveProcessorCountEx(uint16_t GroupNumber) {
-    SYSTEM_INFO Si;
-    GetNativeSystemInfo(&Si);
-    uint64_t Count = Si.dwNumberOfProcessors;
-    if (Count < 4) Count = 4;
+    uint64_t Count = CpuProfile::kLogicalProcessorCount;
     Logger::Log("{CYN}\tKeQueryActiveProcessorCountEx: group=%u returning %llu{RESET}\n", GroupNumber, Count);
     return Count;
 }
