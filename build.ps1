@@ -23,7 +23,10 @@ $vtilBridge = Join-Path $root "extern\vtil-bridge"
 $vtilBuild = Join-Path $root "builds\vtil-bridge"
 
 if (-not (Test-Path $cmake)) {
-    throw "Portable CMake was not found at $cmake."
+    $cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
+}
+if (-not $cmake) {
+    throw "CMake was not found. Install CMake or add it to PATH."
 }
 
 & $cmake -S $vtilBridge -B $vtilBuild -G "Visual Studio 17 2022" -A x64 `
