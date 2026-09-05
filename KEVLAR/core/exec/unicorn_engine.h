@@ -28,7 +28,7 @@
 #define HYPERSPACE_BASE_UC    0xFFFFF70000000000ULL
 #define HYPERSPACE_SIZE_UC    0x200000ULL
 #define GDT_BASE_UC           0xFFFFF70000100000ULL
-#define IDT_BASE_UC           0xFFFFF70000101000ULL
+#define IDT_BASE_UC           0xFFFFF80200070000ULL  // realistic kernel range (hyperspace IDT base is detected by EAC's SIDT check)
 #define SYSMOD_BASE_UC        0xFFFFF80374000000ULL
 #define USERMODE_MAPPING_BASE 0x0000000010000000ULL
 #define SENTINEL_RET_ADDR     0xDEADC0DE00000000ULL
@@ -165,7 +165,7 @@ struct PendingSseFault {
     uint32_t ExceptionCode;
 };
 
-extern PendingSseFault SseFault;
+extern thread_local PendingSseFault SseFault;
 extern bool DiagnosticHooksEnabled;
 extern bool VgkErrorOverrideEnabled;
 extern bool SehDispatchEnabled;

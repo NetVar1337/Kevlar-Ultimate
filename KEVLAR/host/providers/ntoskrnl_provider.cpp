@@ -109,10 +109,10 @@ static uint64_t h_HalAcpiGetTableEx(uint64_t Signature, uint64_t Instance, uint6
     Hdr->Signature = 0x52414D44;   // "DMAR"
     Hdr->Length = TableSize;
     Hdr->Revision = 1;
-    memcpy(Hdr->OemId, "KEVLAR", 6);
-    memcpy(Hdr->OemTableId, "KEVLAR-IOMMU", 12);
+    memcpy(Hdr->OemId, "INTEL ", 6);
+    memcpy(Hdr->OemTableId, "ALASKA  ", 8);
     Hdr->OemRevision = 1;
-    Hdr->CreatorId = 0x524C564B;   // "KVLAR"
+    Hdr->CreatorId = 0x4C544E49;
     Hdr->CreatorRevision = 1;
 
     auto* Drhd = (DrhdEntry*)(Table + sizeof(DmarHeader));
@@ -409,6 +409,7 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("RtlLookupFunctionEntry", h_RtlLookupFunctionEntry);
     Provider::AddFuncImpl("RtlVirtualUnwind", h_RtlVirtualUnwind);
     Provider::AddFuncImpl("RtlCaptureContext", h_RtlCaptureContext);
+    Provider::AddFuncImpl("RtlWalkFrameChain", h_RtlWalkFrameChain);
     Provider::AddFuncImpl("CmRegisterCallbackEx", h_CmRegisterCallbackEx);
     Provider::AddFuncImpl("CmUnRegisterCallback", h_CmUnRegisterCallback);
     Provider::AddFuncImpl("CmRegisterCallback", h_CmRegisterCallback);

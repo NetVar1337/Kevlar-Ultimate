@@ -63,6 +63,9 @@ static DWORD ThreadEntryCore(ThreadStartInfo* Info) {
     Logger::Log("{MAG}Thread %llu starting at 0x%llx{RESET}\n", Ctx->ThreadId, Info->StartRoutine);
 
     Ctx->Running = true;
+    // Vendor-parity: raw engine run; workers are short-lived decoys whose quick exit
+    // the driver's init state machine expects (extended TryEmulate retry here stalls
+    // the DriverEntry completion-wait spin at drv+0x1edd75).
     auto Err = uc_emu_start(Info->Engine, Info->StartRoutine, SENTINEL_RET_ADDR, 0, 0);
     Ctx->Running = false;
 

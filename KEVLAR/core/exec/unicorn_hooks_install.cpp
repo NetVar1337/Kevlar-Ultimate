@@ -373,17 +373,19 @@ void UnicornEmu::InstallWatchpoints(uc_engine* Uc) {
         Logger::Log("{YEL}WRMSR insn hook not supported (err=%s){RESET}\n", uc_strerror(Err));
     }
 
-    if (!UnicornEmu::RdmsrInsnHookSupported || !UnicornEmu::WrmsrInsnHookSupported) {
+    // Always install code-hook fallback: catches RDTSC/RDTSCP (UC_HOOK_INSN for
+    // RDTSC is silently broken in Unicorn 2.x) plus MSR ops when insn hooks fail.
+    {
         UnicornEmu::MsrCodeInterceptEnabled = true;
         uc_hook MsrFallbackHook;
         uc_err MsrFallbackErr = uc_hook_add(Uc, &MsrFallbackHook, UC_HOOK_CODE, (void*)Hooks::OnMsrFallback, nullptr,
             DRIVER_BASE_UC, DRIVER_BASE_UC + 0x10000000ULL - 1);
         if (MsrFallbackErr == UC_ERR_OK) {
-            Logger::Log("{GRN}MSR fallback code hook installed (rdmsr=%d wrmsr=%d){RESET}\n",
+            Logger::Log("{GRN}MSR+RDTSC fallback code hook installed (rdmsr=%d wrmsr=%d){RESET}\n",
                 UnicornEmu::RdmsrInsnHookSupported ? 1 : 0,
                 UnicornEmu::WrmsrInsnHookSupported ? 1 : 0);
         } else {
-            Logger::Log("{RED}MSR fallback code hook failed: %s{RESET}\n", uc_strerror(MsrFallbackErr));
+            Logger::Log("{RED}MSR+RDTSC fallback code hook failed: %s{RESET}\n", uc_strerror(MsrFallbackErr));
         }
     }
 

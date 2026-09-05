@@ -549,28 +549,9 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
     }
 
     if (SystemInformationClass == 0xC5) {
-        ULONG RequiredSize = sizeof(uint64_t);
-        WriteRetLen(RequiredSize);
-        if (SystemInformationLength < RequiredSize) {
-            Logger::Log("  {MAG}NtQuerySystemInformation class={WHT}0xC5{MAG} (SystemHypervisorSharedPageInformation) {MAG}bufLen={WHT}0x%x {MAG}-> STATUS_BUFFER_OVERFLOW {MAG}caller=drv+0x%llx{RESET}\n",
-                SystemInformationLength, CallerRva);
-            return (NTSTATUS)0xC0000004;
-        }
-        uint64_t SharedPageVa = HYPERVISOR_SHARED_PAGE_BASE_UC;
-        WriteBuf((uint8_t*)&SharedPageVa, sizeof(uint64_t));
-        Logger::Log("  {MAG}NtQuerySystemInformation class={WHT}0xC5{MAG} (SystemHypervisorSharedPageInformation) {MAG}-> HypervisorSharedUserVa=0x%llx {MAG}caller=drv+0x%llx{RESET}\n", SharedPageVa, CallerRva);
-        if (DIAG_IS_ENABLED()) {
-            HvspReadEvent Ev = {};
-            Ev.Base.Sequence = DIAG_SEQ;
-            Ev.Base.AccessType = ACCESS_API;
-            Ev.Address = SharedPageVa;
-            Ev.Offset = 0;
-            Ev.Size = 8;
-            Ev.Value = SharedPageVa;
-            strncpy(Ev.FieldName, "HypervisorSharedUserVa", sizeof(Ev.FieldName) - 1);
-            DIAG_HVSP_READ(Ev);
-        }
-        return 0;
+        WriteRetLen(0);
+        Logger::Log("  {MAG}NtQuerySystemInformation class={WHT}0xC5{MAG} (SystemHypervisorSharedPageInformation) {MAG}-> STATUS_INVALID_INFO_CLASS {MAG}caller=drv+0x%llx{RESET}\n", CallerRva);
+        return STATUS_INVALID_INFO_CLASS;
     }
 
     if (SystemInformationClass == 0x67) {

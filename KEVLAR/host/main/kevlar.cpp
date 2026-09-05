@@ -13,6 +13,8 @@
 #include <PEMapper/pefile.h>
 
 #include <Logger/Logger.h>
+#include "core/io/usermode_client.h"
+#include <thread>
 #include <SymParser/symparser.hpp>
 
 #include "host/config/config.h"
@@ -278,6 +280,8 @@ int main(int Argc, char* Argv[]) {
     uint64_t VtilSize = 0x5000;
     std::string VtilOutputPath;
     bool VtilRequested = false;
+    std::string ClientScript;
+    int ClientDelay = 120;
 
     for (int I = 1; I < Argc; I++) {
         std::string Arg = Argv[I];
@@ -364,6 +368,18 @@ int main(int Argc, char* Argv[]) {
                 } else {
                     Logger::Log("{RED}--check requires a file path{RESET}\n");
                 }
+            } else if (Arg.rfind("--client-delay", 0) == 0) {
+                std::string Val = (Arg.size() > 14 && Arg[14] == '=')
+                    ? Arg.substr(15) : (I + 1 < Argc ? Argv[++I] : "");
+                ClientDelay = Val.empty() ? 120 : atoi(Val.c_str());
+            } else if (Arg.rfind("--client", 0) == 0) {
+                std::string Val = (Arg.size() > 8 && Arg[8] == '=')
+                    ? Arg.substr(9) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--client requires a script path{RESET}\n");
+                    return 1;
+                }
+                ClientScript = std::move(Val);
             } else if (Arg == "--no-pause") {
                 NoPause = true;
             } else if (Arg.rfind("--max-insns", 0) == 0) {
@@ -647,6 +663,15 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("{GRN}DriverEntry completed successfully{RESET}\n");
     else
         Logger::Log("{RED}DriverEntry failed or was stopped{RESET}\n");
+
+    if (!ClientScript.empty()) {
+        std::string ScriptCopy = ClientScript;
+        int Delay = ClientDelay;
+        std::thread([ScriptCopy, Delay]() {
+            UsermodeClient::RunScript(ScriptCopy, Delay);
+        }).detach();
+        Logger::Log("{CYN}User-mode client armed (script=%s delay=%ds){RESET}\n", ClientScript.c_str(), ClientDelay);
+    }
 
     Logger::Log("{MAG}Waiting for spawned threads (will keep alive up to 3600s for deferred work)...{RESET}\n");
 

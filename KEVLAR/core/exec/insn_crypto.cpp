@@ -1,4 +1,19 @@
 #include "core/exec/insn_emulator_internal.h"
+#include <intrin.h>
+
+// --- Host SHA-NI fast path (EAC workers hash system catalogs; scalar SHA1 is 100x slower) ---
+static bool HostHasShani() {
+    static int Cached = -1;
+    if (Cached < 0) {
+        int Sp[4] = {};
+        __cpuid(Sp, 7);
+        Cached = (Sp[1] & (1 << 29)) ? 1 : 0;
+    }
+    return Cached != 0;
+}
+static inline __m128i ToM128(const XMM128& V) { __m128i M; memcpy(&M, &V, 16); return M; }
+static inline void FromM128(__m128i M, XMM128& V) { memcpy(&V, &M, 16); }
+
 
 static uint32_t Rol32(uint32_t X, int N) { return (X << N) | (X >> (32 - N)); }
 static uint32_t Ror32(uint32_t X, int N) { return (X >> N) | (X << (32 - N)); }
@@ -77,7 +92,7 @@ void InitCrc32cTable() {
     }
 }
 
-static void EmSha1Rnds4(XMM128& Dst, const XMM128& Src, uint8_t Fn) {
+static void EmSha1Rnds4Soft(XMM128& Dst, const XMM128& Src, uint8_t Fn) {
     uint32_t A = Dst.L[3], B = Dst.L[2], C = Dst.L[1], D = Dst.L[0];
     uint32_t E = 0;
 
@@ -103,21 +118,21 @@ static void EmSha1Rnds4(XMM128& Dst, const XMM128& Src, uint8_t Fn) {
     Dst.L[0] = D;
 }
 
-static void EmSha1Nexte(XMM128& Dst, const XMM128& Src) {
+static void EmSha1NexteSoft(XMM128& Dst, const XMM128& Src) {
     Dst.L[3] = Src.L[3] + Rol32(Dst.L[3], 30);
     Dst.L[2] = Src.L[2];
     Dst.L[1] = Src.L[1];
     Dst.L[0] = Src.L[0];
 }
 
-static void EmSha1Msg1(XMM128& Dst, const XMM128& Src) {
+static void EmSha1Msg1Soft(XMM128& Dst, const XMM128& Src) {
     Dst.L[3] ^= Dst.L[1];
     Dst.L[2] ^= Dst.L[0];
     Dst.L[1] ^= Src.L[3];
     Dst.L[0] ^= Src.L[2];
 }
 
-static void EmSha1Msg2(XMM128& Dst, const XMM128& Src) {
+static void EmSha1Msg2Soft(XMM128& Dst, const XMM128& Src) {
     Dst.L[3] = Rol32(Dst.L[3] ^ Src.L[2], 1);
     Dst.L[2] = Rol32(Dst.L[2] ^ Src.L[1], 1);
     Dst.L[1] = Rol32(Dst.L[1] ^ Src.L[0], 1);
@@ -143,14 +158,14 @@ static void EmSha256Rnds2(XMM128& Dst, const XMM128& Src, const XMM128& Wk) {
     Dst.L[0] = F;
 }
 
-static void EmSha256Msg1(XMM128& Dst, const XMM128& Src) {
+static void EmSha256Msg1Soft(XMM128& Dst, const XMM128& Src) {
     Dst.L[0] += Sha256SmSigma0(Dst.L[1]);
     Dst.L[1] += Sha256SmSigma0(Dst.L[2]);
     Dst.L[2] += Sha256SmSigma0(Dst.L[3]);
     Dst.L[3] += Sha256SmSigma0(Src.L[0]);
 }
 
-static void EmSha256Msg2(XMM128& Dst, const XMM128& Src) {
+static void EmSha256Msg2Soft(XMM128& Dst, const XMM128& Src) {
     Dst.L[0] += Sha256SmSigma1(Src.L[2]);
     Dst.L[1] += Sha256SmSigma1(Src.L[3]);
     Dst.L[2] += Sha256SmSigma1(Dst.L[0]);
@@ -288,6 +303,41 @@ static void EmPclmulqdq(XMM128& Dst, const XMM128& Src, uint8_t Imm) {
     Dst.L[1] = (uint32_t)(Lo >> 32);
     Dst.L[2] = (uint32_t)(Hi);
     Dst.L[3] = (uint32_t)(Hi >> 32);
+}
+
+static void EmSha1Rnds4(XMM128& Dst, const XMM128& Src, uint8_t Fn) {
+    if (HostHasShani()) {
+        __m128i d = ToM128(Dst), b = ToM128(Src), r;
+        switch (Fn & 3) {
+        case 0: r = _mm_sha1rnds4_epu32(d, b, 0); break;
+        case 1: r = _mm_sha1rnds4_epu32(d, b, 1); break;
+        case 2: r = _mm_sha1rnds4_epu32(d, b, 2); break;
+        default: r = _mm_sha1rnds4_epu32(d, b, 3); break;
+        }
+        FromM128(r, Dst);
+        return;
+    }
+    EmSha1Rnds4Soft(Dst, Src, Fn);
+}
+static void EmSha1Nexte(XMM128& Dst, const XMM128& Src) {
+    if (HostHasShani()) { XMM128 R; FromM128(_mm_sha1nexte_epu32(ToM128(Dst), ToM128(Src)), R); Dst = R; return; }
+    EmSha1NexteSoft(Dst, Src);
+}
+static void EmSha1Msg1(XMM128& Dst, const XMM128& Src) {
+    if (HostHasShani()) { XMM128 R; FromM128(_mm_sha1msg1_epu32(ToM128(Dst), ToM128(Src)), R); Dst = R; return; }
+    EmSha1Msg1Soft(Dst, Src);
+}
+static void EmSha1Msg2(XMM128& Dst, const XMM128& Src) {
+    if (HostHasShani()) { XMM128 R; FromM128(_mm_sha1msg2_epu32(ToM128(Dst), ToM128(Src)), R); Dst = R; return; }
+    EmSha1Msg2Soft(Dst, Src);
+}
+static void EmSha256Msg1(XMM128& Dst, const XMM128& Src) {
+    if (HostHasShani()) { XMM128 R; FromM128(_mm_sha256msg1_epu32(ToM128(Dst), ToM128(Src)), R); Dst = R; return; }
+    EmSha256Msg1Soft(Dst, Src);
+}
+static void EmSha256Msg2(XMM128& Dst, const XMM128& Src) {
+    if (HostHasShani()) { XMM128 R; FromM128(_mm_sha256msg2_epu32(ToM128(Dst), ToM128(Src)), R); Dst = R; return; }
+    EmSha256Msg2Soft(Dst, Src);
 }
 
 static uint32_t EmCrc32cByte(uint32_t Crc, uint8_t Data) {

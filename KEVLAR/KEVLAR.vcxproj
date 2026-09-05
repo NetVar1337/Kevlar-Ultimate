@@ -198,6 +198,7 @@
     <ClCompile Include="core\io\io_manager.cpp" />
     <ClCompile Include="core\io\irp_ioctl.cpp" />
     <ClCompile Include="core\io\irp_readwrite.cpp" />
+    <ClCompile Include="core\io\usermode_client.cpp" />
     <ClCompile Include="core\loader\environment.cpp" />
     <ClCompile Include="core\loader\kernel_structs.cpp" />
     <ClCompile Include="core\memory\unicorn_memory.cpp" />

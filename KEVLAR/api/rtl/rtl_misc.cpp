@@ -98,8 +98,79 @@ PVOID h_RtlVirtualUnwind(DWORD HandlerType, uint64_t ImageBase, uint64_t Control
 
 void h_RtlCaptureContext(PCONTEXT ContextRecord) {
     auto HostCtx = UcPtr(ContextRecord);
+    if (!HostCtx) return;
     memset(HostCtx, 0, sizeof(CONTEXT));
     HostCtx->ContextFlags = CONTEXT_FULL;
+    uc_engine* Eng = UnicornThread::GetCurrentEngine();
+    if (!Eng) Eng = UnicornEmu::PrimaryEngine;
+    if (!Eng) return;
+    uint64_t V = 0;
+    uc_reg_read(Eng, UC_X86_REG_RIP, &V); HostCtx->Rip = V;
+    uc_reg_read(Eng, UC_X86_REG_RSP, &V); HostCtx->Rsp = V;
+    uc_reg_read(Eng, UC_X86_REG_RBP, &V); HostCtx->Rbp = V;
+    uc_reg_read(Eng, UC_X86_REG_RAX, &V); HostCtx->Rax = V;
+    uc_reg_read(Eng, UC_X86_REG_RBX, &V); HostCtx->Rbx = V;
+    uc_reg_read(Eng, UC_X86_REG_RCX, &V); HostCtx->Rcx = V;
+    uc_reg_read(Eng, UC_X86_REG_RDX, &V); HostCtx->Rdx = V;
+    uc_reg_read(Eng, UC_X86_REG_RSI, &V); HostCtx->Rsi = V;
+    uc_reg_read(Eng, UC_X86_REG_RDI, &V); HostCtx->Rdi = V;
+    uc_reg_read(Eng, UC_X86_REG_R8, &V); HostCtx->R8 = V;
+    uc_reg_read(Eng, UC_X86_REG_R9, &V); HostCtx->R9 = V;
+    uc_reg_read(Eng, UC_X86_REG_R10, &V); HostCtx->R10 = V;
+    uc_reg_read(Eng, UC_X86_REG_R11, &V); HostCtx->R11 = V;
+    uc_reg_read(Eng, UC_X86_REG_R12, &V); HostCtx->R12 = V;
+    uc_reg_read(Eng, UC_X86_REG_R13, &V); HostCtx->R13 = V;
+    uc_reg_read(Eng, UC_X86_REG_R14, &V); HostCtx->R14 = V;
+    uc_reg_read(Eng, UC_X86_REG_R15, &V); HostCtx->R15 = V;
+    HostCtx->SegCs = 0x10;
+    HostCtx->SegSs = 0x18;
+    HostCtx->SegDs = 0x2B;
+    HostCtx->SegEs = 0x2B;
+    HostCtx->SegGs = 0x2B;
+    HostCtx->MxCsr = 0x1F80;
+    HostCtx->EFlags = 0x202;
+}
+
+ULONG h_RtlWalkFrameChain(PVOID* Callers, ULONG Count, ULONG Flags) {
+    if (!Callers || Count == 0)
+        return 0;
+    if (Flags & 1)
+        return 0;
+    auto HostCallers = UcPtr(Callers);
+    if (!HostCallers)
+        return 0;
+    uc_engine* Eng = UnicornThread::GetCurrentEngine();
+    if (!Eng) Eng = UnicornEmu::PrimaryEngine;
+    if (!Eng)
+        return 0;
+    uint64_t Rsp = 0;
+    uint64_t Rip = 0;
+    uc_reg_read(Eng, UC_X86_REG_RSP, &Rsp);
+    uc_reg_read(Eng, UC_X86_REG_RIP, &Rip);
+    ULONG Filled = 0;
+    auto accept = [](uint64_t Addr) -> bool {
+        if (Addr < 0xFFFF800000000000ULL)
+            return false;
+        if (Addr >= SENTINEL_BASE_UC && Addr < SENTINEL_BASE_UC + SENTINEL_RANGE_SIZE)
+            return false;
+        if ((Addr & 0xFFFFFFFF00000000ULL) == 0xDEADC0DE00000000ULL)
+            return false;
+        return true;
+    };
+    if (accept(Rip) && Filled < Count)
+        HostCallers[Filled++] = (PVOID)Rip;
+    for (int I = 0; I < 96 && Filled < Count; I++) {
+        void* Host = UnicornMem::UcToHost(Rsp + (uint64_t)I * 8ull);
+        if (!Host)
+            continue;
+        uint64_t Slot = *(uint64_t*)Host;
+        if (!accept(Slot))
+            continue;
+        if (Filled && (uint64_t)HostCallers[Filled - 1] == Slot)
+            continue;
+        HostCallers[Filled++] = (PVOID)Slot;
+    }
+    return Filled;
 }
 
 NTSTATUS h_RtlGUIDFromString(PUNICODE_STRING GuidString, GUID* Guid) {

@@ -8,6 +8,7 @@ PIMAGE_NT_HEADERS h_RtlImageNtHeader(PVOID ImageBase);
 PRUNTIME_FUNCTION h_RtlLookupFunctionEntry(uint64_t ControlPc, uint64_t* ImageBase, PVOID HistoryTable);
 PVOID h_RtlVirtualUnwind(DWORD HandlerType, uint64_t ImageBase, uint64_t ControlPc, PRUNTIME_FUNCTION FunctionEntry, PCONTEXT ContextRecord, PVOID* HandlerData, uint64_t* EstablisherFrame, PVOID ContextPointers);
 void h_RtlCaptureContext(PCONTEXT ContextRecord);
+ULONG h_RtlWalkFrameChain(PVOID* Callers, ULONG Count, ULONG Flags);
 BOOLEAN h_RtlTimeFieldsToTime(PTIME_FIELDS TimeFields, PLARGE_INTEGER Time);
 NTSTATUS h_RtlGUIDFromString(PUNICODE_STRING GuidString, GUID* Guid);
 NTSTATUS h_RtlStringFromGUID(GUID* Guid, PUNICODE_STRING GuidString);

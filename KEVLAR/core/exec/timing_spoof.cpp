@@ -85,15 +85,10 @@ void UnicornEmu::InitTimingSpoofing() {
     QueryPerformanceFrequency(&Freq);
     QueryPerformanceCounter(&StartQpc);
 
-    FILETIME SystemTime;
-    GetSystemTimeAsFileTime(&SystemTime);
-    ULARGE_INTEGER SystemTimeValue = {};
-    SystemTimeValue.LowPart = SystemTime.dwLowDateTime;
-    SystemTimeValue.HighPart = SystemTime.dwHighDateTime;
-
     QpcFrequency = Freq.QuadPart;
     EmulationStartQpc = StartQpc.QuadPart;
-    EmulationStartSystemTime = static_cast<int64_t>(SystemTimeValue.QuadPart);
+
+    EmulationStartSystemTime = CpuProfile::kEmulatedSystemTimeBase;
 
     // Aligned with CpuProfile leaf 0x15 (38.4MHz * 168 / 2 = 3.2256 GHz) so a
     // driver that derives frequency from CPUID sees the same rate RDTSC uses.
@@ -102,8 +97,8 @@ void UnicornEmu::InitTimingSpoofing() {
     HookTimeAccumulated = 0;
     VirtualTsc = CpuProfile::kInitialVirtualTsc;
 
-    Logger::Log("{GRN}Timing spoofing initialized: QpcFreq=%lld TscPerQpc=%.2f SystemTime=0x%llx{RESET}\n",
-        QpcFrequency, TscPerQpcTick, (unsigned long long)EmulationStartSystemTime);
+    Logger::Log("{GRN}Timing spoofing initialized: QpcFreq=%lld TscPerQpc=%.2f{RESET}\n",
+        QpcFrequency, TscPerQpcTick);
 }
 
 int64_t GetEmulatedQpcElapsed() {

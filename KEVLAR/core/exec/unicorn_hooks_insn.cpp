@@ -1138,6 +1138,52 @@ void UnicornEmu::Hooks::OnWrmsr(uc_engine* Uc, void* UserData) {
 }
 
 void UnicornEmu::Hooks::OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    // --- RDTSC / RDTSCP fallback (UC_HOOK_INSN for RDTSC is unreliable in Unicorn 2.x) ---
+    {
+        uint8_t Buf[4] = {};
+        if (uc_mem_read(Uc, Addr, Buf, 4) == UC_ERR_OK) {
+            // Skip legacy/REX prefixes
+            int Off = 0;
+            while (Off < 3) {
+                uint8_t B = Buf[Off];
+                if ((B >= 0x40 && B <= 0x4F) || B == 0x66 || B == 0xF2 || B == 0xF3)
+                    Off++;
+                else
+                    break;
+            }
+            if (Off + 1 < 4 && Buf[Off] == 0x0F && Buf[Off + 1] == 0x31) {
+                // RDTSC (0F 31)
+                Hooks::OnRdtsc(Uc, UserData);
+                uint64_t NextRip = Addr + Off + 2;
+                uc_reg_write(Uc, UC_X86_REG_RIP, &NextRip);
+                static uint64_t RdtscFallbackCount = 0;
+                RdtscFallbackCount++;
+                if (RdtscFallbackCount <= 10 || (RdtscFallbackCount % 5000 == 0)) {
+                    uint64_t Rva = (Addr >= DRIVER_BASE_UC) ? (Addr - DRIVER_BASE_UC) : Addr;
+                    Logger::Log("{MAG}[RDTSC FALLBACK] drv+0x%llx hits=%llu{RESET}\n", Rva, RdtscFallbackCount);
+                }
+                return;
+            }
+            if (Off + 2 < 4 && Buf[Off] == 0x0F && Buf[Off + 1] == 0x01 && Buf[Off + 2] == 0xF9) {
+                // RDTSCP (0F 01 F9)
+                Hooks::OnRdtsc(Uc, UserData);
+                // RDTSCP also sets ECX to IA32_TSC_AUX (processor ID)
+                uint64_t TscAux = 0;
+                uc_reg_write(Uc, UC_X86_REG_RCX, &TscAux);
+                uint64_t NextRip = Addr + Off + 3;
+                uc_reg_write(Uc, UC_X86_REG_RIP, &NextRip);
+                static uint64_t RdtscpFallbackCount = 0;
+                RdtscpFallbackCount++;
+                if (RdtscpFallbackCount <= 10 || (RdtscpFallbackCount % 5000 == 0)) {
+                    uint64_t Rva = (Addr >= DRIVER_BASE_UC) ? (Addr - DRIVER_BASE_UC) : Addr;
+                    Logger::Log("{MAG}[RDTSCP FALLBACK] drv+0x%llx hits=%llu{RESET}\n", Rva, RdtscpFallbackCount);
+                }
+                return;
+            }
+        }
+    }
+
+    // --- MSR fallback (original) ---
     bool IsRead = false;
     uint32_t InstructionLen = 0;
     if (!DecodeMsrInstructionAt(Uc, Addr, IsRead, InstructionLen))

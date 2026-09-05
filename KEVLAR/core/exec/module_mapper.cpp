@@ -189,11 +189,6 @@ static void RelocateImage(unsigned char* ImageBuf, uint64_t OldBase, uint64_t Ne
 }
 
 uint64_t UnicornEmu::MapDriverImage(PEFile* Driver, uint64_t DesiredBase) {
-    if (!Driver || !Driver->GetMappedImageBase() || !Driver->GetVirtualSize()) {
-        Logger::Log("{RED}MapDriverImage: driver has no mapped image{RESET}\n");
-        return 0;
-    }
-
     uint64_t VirtSize = Driver->GetVirtualSize();
     uint64_t AlignedSize = (VirtSize + 0xFFF) & ~0xFFFULL;
 
@@ -205,29 +200,8 @@ uint64_t UnicornEmu::MapDriverImage(PEFile* Driver, uint64_t DesiredBase) {
     memset(DriverHostCopy, 0, (size_t)AlignedSize);
     memcpy(DriverHostCopy, (void*)Driver->GetMappedImageBase(), (size_t)VirtSize);
 
-    uint64_t SourceImageBase = Driver->IsRawMapped() ? Driver->GetImageBase() : Driver->GetMappedImageBase();
-    RelocateImage((unsigned char*)DriverHostCopy, SourceImageBase, DesiredBase);
-    if (Driver->IsRawMapped() && Driver->GetImageBase() != DesiredBase) {
-        void* PreferredBaseCopy = _aligned_malloc((size_t)AlignedSize, 0x1000);
-        if (!PreferredBaseCopy) {
-            _aligned_free(DriverHostCopy);
-            Logger::Log("{RED}MapDriverImage preferred-base alias alloc failed{RESET}\n");
-            return 0;
-        }
-
-        memset(PreferredBaseCopy, 0, (size_t)AlignedSize);
-        memcpy(PreferredBaseCopy, (void*)Driver->GetMappedImageBase(), (size_t)VirtSize);
-        if (!MapRegionPtr(PrimaryEngine, Driver->GetImageBase(), AlignedSize, UC_PROT_ALL,
-                          PreferredBaseCopy, "DriverImagePreferredBase")) {
-            _aligned_free(PreferredBaseCopy);
-            _aligned_free(DriverHostCopy);
-            return 0;
-        }
-        UnicornMem::TrackExisting(Driver->GetImageBase(), PreferredBaseCopy, AlignedSize,
-                                  "DriverImagePreferredBase");
-        Logger::Log("{BLU}MapDriverImage: preferred-base alias at 0x%llx{RESET}\n",
-                    Driver->GetImageBase());
-    }
+    uint64_t HostLoadBase = Driver->GetMappedImageBase();
+    RelocateImage((unsigned char*)DriverHostCopy, HostLoadBase, DesiredBase);
 
     if (!MapRegionPtr(PrimaryEngine, DesiredBase, AlignedSize, UC_PROT_ALL, DriverHostCopy, "DriverImage"))
         return 0;
@@ -235,7 +209,7 @@ uint64_t UnicornEmu::MapDriverImage(PEFile* Driver, uint64_t DesiredBase) {
     UnicornMem::TrackExisting(DesiredBase, DriverHostCopy, AlignedSize, "DriverImage");
 
     Logger::Log("{BLU}MapDriverImage: 0x%llx (size=0x%llx, EP RVA=0x%llx, relocated from 0x%llx){RESET}\n",
-        DesiredBase, AlignedSize, Driver->GetEP(), SourceImageBase);
+        DesiredBase, AlignedSize, Driver->GetEP(), HostLoadBase);
     return DesiredBase;
 }
 

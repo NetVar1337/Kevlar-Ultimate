@@ -1,0 +1,11 @@
+# EAC-EOS usermode probe — run against KEVLAR's emulated EasyAntiCheat_EOS.sys
+# (device list first: the driver names its control device during deferred init)
+wait 30
+list
+select EasyAntiCheat
+open
+ioctl 220000 - 256
+read 256
+close
+list
+dump 1400190fd 32

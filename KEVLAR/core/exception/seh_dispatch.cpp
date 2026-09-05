@@ -554,8 +554,8 @@ static bool DispatchToHandler(
     uc_reg_write(Uc, UC_X86_REG_RIP, &JumpTarget);
     uc_reg_write(Uc, UC_X86_REG_RSP, &HandlerFrameRsp);
 
-    uint64_t ExCode64 = (uint64_t)ExceptionCode;
-    uc_reg_write(Uc, UC_X86_REG_RAX, &ExCode64);
+    uint64_t ExecHandler = 1; // EXCEPTION_EXECUTE_HANDLER — not the exception code
+    uc_reg_write(Uc, UC_X86_REG_RAX, &ExecHandler);
 
     return true;
 }

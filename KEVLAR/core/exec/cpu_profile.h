@@ -19,12 +19,11 @@ namespace CpuProfile {
 
 // TSC derived from leaf 0x15: 38.4MHz crystal * 168 / 2 = 3.2256 GHz.
 inline constexpr uint64_t kProfileTscHz = 3225600000ULL;
-// Every synthetic CPU surface uses this count; CPUID topology exposes 16
-// logical processors, so KUSER_SHARED_DATA and ntoskrnl exports must agree.
-inline constexpr uint32_t kLogicalProcessorCount = 16;
 // Plausible post-boot TSC value (~10 min uptime at 3.226 GHz); fixed so runs
 // are reproducible instead of seeding from the host RDTSC.
 inline constexpr uint64_t kInitialVirtualTsc = 0x1C0000000000ULL;
+// KUSER_SHARED_DATA SystemTime (100ns since 1601), fixed ~2024-07 value.
+inline constexpr int64_t kEmulatedSystemTimeBase = 0x01DB2E7F4B7A0000LL;
 
 inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
     memset(Out, 0, 16);

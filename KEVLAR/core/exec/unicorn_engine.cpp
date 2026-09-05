@@ -39,7 +39,7 @@ namespace UnicornEmu {
     uint64_t VirtualTsc = 0;
     uint64_t TscIncrement = 50;
     ZydisDecoder Decoder;
-    PendingSseFault SseFault = {};
+    thread_local PendingSseFault SseFault = {};
 
     volatile int64_t HookTimeAccumulated = 0;
     int64_t EmulationStartQpc = 0;

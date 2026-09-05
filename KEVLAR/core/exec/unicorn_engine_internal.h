@@ -103,3 +103,12 @@ struct SysModCallEntry {
 static constexpr int SYSMOD_RING_SIZE = 64;
 extern SysModCallEntry SysModRing[SYSMOD_RING_SIZE];
 extern int SysModRingIdx;
+
+struct EmulationLoopResult {
+    bool Ok;
+    bool HostCrash;
+    DWORD ExceptionCode;
+    uint64_t CrashRip, CrashRsp, CrashRax, CrashRcx, CrashRdx, CrashR8, CrashR9, CrashRbx;
+};
+
+EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint);

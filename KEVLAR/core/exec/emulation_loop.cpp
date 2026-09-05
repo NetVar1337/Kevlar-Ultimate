@@ -6,14 +6,9 @@
 #include "core/memory/unicorn_memory.h"
 #include "core/exception/seh_dispatch.h"
 
-struct EmulationLoopResult {
-    bool Ok;
-    bool HostCrash;
-    DWORD ExceptionCode;
-    uint64_t CrashRip, CrashRsp, CrashRax, CrashRcx, CrashRdx, CrashR8, CrashR9, CrashRbx;
-};
+#include "core/exec/unicorn_engine_internal.h"
 
-static EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) {
+EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) {
     EmulationLoopResult R = {};
     R.Ok = true;
     uint64_t CurrentEmuRip = EntryPoint;
@@ -21,8 +16,7 @@ static EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) 
 
     __try {
     for (;;) {
-        uc_err Err = uc_emu_start(Uc, CurrentEmuRip, SENTINEL_RET_ADDR, 0,
-            UnicornEmu::ExecutionInstructionLimit);
+        uc_err Err = uc_emu_start(Uc, CurrentEmuRip, SENTINEL_RET_ADDR, 0, 0);
 
         if (UnicornEmu::SseFault.Active) {
             UnicornEmu::SseFault.Active = false;
@@ -52,14 +46,6 @@ static EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) 
             }
 
             Logger::Log("{RED}Emulation error at RIP={WHT}0x%llx{RED}: %s{RESET}\n", CurrentRip, uc_strerror(Err));
-            R.Ok = false;
-            return R;
-        }
-        if (UnicornEmu::ExecutionInstructionLimit) {
-            uint64_t CurrentRip = 0;
-            uc_reg_read(Uc, UC_X86_REG_RIP, &CurrentRip);
-            Logger::Log("{YEL}DriverEntry instruction limit (%llu) reached at RIP=0x%llx{RESET}\n",
-                UnicornEmu::ExecutionInstructionLimit, CurrentRip);
             R.Ok = false;
             return R;
         }
