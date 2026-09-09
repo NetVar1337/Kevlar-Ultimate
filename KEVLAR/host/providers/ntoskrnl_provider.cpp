@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "host/providers/ntoskrnl_provider.h"
 #include "host/providers/provider.h"
 
@@ -28,47 +30,37 @@
 #include "core/debug/dbg_bugcheck.h"
 #include "api/io/flt_filter.h"
 #include "api/rtl/crt_string.h"
+#include "api/rtl/rtl_hash.h"
 #include "core/debug/dbg_print.h"
+#include "core/hardware/hardware_runtime.h"
 
 // Bounded ACPI/PCI/IOMMU model: synthetic PCI config space + a guest-resident
 // VT-d DMAR table describing one DRHD unit at 0xFED90000 (mapped in MmMapIoSpaceEx).
 // ponytail: shaped from the general shape of IOMMU-oriented drivers, not from a
 // captured FACEIT_IOMMU trace; re-validate against a real trace when one is available.
 static uint64_t h_HalGetBusDataByOffset(uint64_t BusDataType, uint64_t BusNumber, uint64_t SlotNumber, PVOID Buffer, uint64_t Offset, uint64_t Length) {
-    if (BusDataType != 5)   // PCIConfiguration
+    if (BusDataType != 5 || Length == 0 || Offset >= Kevlar::Hardware::kPciConfigSpaceSize)
+        return 0;
+    auto HostBuffer = UcPtr(static_cast<uint8_t*>(Buffer));
+    if (!HostBuffer)
         return 0;
 
-    auto HostBuffer = UcPtr(Buffer);
-    if (!HostBuffer || Length == 0) return 0;
-
-    uint8_t Config[256] = { 0 };
-    uint8_t Device = (uint8_t)((SlotNumber >> 3) & 0x1F);
-    uint8_t Function = (uint8_t)(SlotNumber & 0x7);
-
-    if (Device == 0 && Function == 0) {
-        // Intel host bridge (vendor 0x8086)
-        Config[0x00] = 0x86; Config[0x01] = 0x80;        // VendorID
-        Config[0x02] = 0x1F; Config[0x03] = 0x3E;        // DeviceID 0x3E1F
-        Config[0x08] = 0x00; Config[0x09] = 0x00;        // Revision
-        Config[0x0A] = 0x06; Config[0x0B] = 0x00;        // Class: Host Bridge
-        Config[0x0E] = 0x00; Config[0x0F] = 0x00;        // HeaderType 0
-    } else if (Device == 0 && Function == 2) {
-        // Intel VT-d IOMMU (Raptor Lake 0x4612)
-        Config[0x00] = 0x86; Config[0x01] = 0x80;        // VendorID
-        Config[0x02] = 0x12; Config[0x03] = 0x46;        // DeviceID 0x4612
-        Config[0x08] = 0x10; Config[0x09] = 0x00;        // Revision
-        Config[0x0A] = 0x08; Config[0x0B] = 0x00;        // Class: System Peripheral
-        Config[0x0E] = 0x00; Config[0x0F] = 0x00;        // HeaderType 0
-    } else {
-        return 0;   // no synthetic config for other device/function slots
+    Kevlar::Hardware::PciAddress Address{
+        0,
+        static_cast<uint8_t>(BusNumber),
+        static_cast<uint8_t>(SlotNumber & 0x1F),
+        static_cast<uint8_t>((SlotNumber >> 5) & 0x07),
+    };
+    size_t CopyLength = static_cast<size_t>((std::min)(
+        Length, Kevlar::Hardware::kPciConfigSpaceSize - Offset));
+    for (size_t Index = 0; Index < CopyLength; ++Index) {
+        auto Value = Kevlar::Hardware::ActiveHardware().Pci().ReadConfig(
+            Address, static_cast<uint16_t>(Offset + Index), 1);
+        if (!Value)
+            return Index;
+        HostBuffer[Index] = static_cast<uint8_t>(*Value);
     }
-
-    if (Offset >= sizeof(Config)) return 0;
-    size_t CopyLen = (size_t)Length;
-    if (Offset + CopyLen > sizeof(Config))
-        CopyLen = sizeof(Config) - (size_t)Offset;
-    memcpy(HostBuffer, Config + Offset, CopyLen);
-    return CopyLen;
+    return CopyLength;
 }
 
 static uint64_t h_HalAcpiGetTableEx(uint64_t Signature, uint64_t Instance, uint64_t OutTable, uint64_t OutSize) {
@@ -179,6 +171,24 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("MmMapIoSpaceEx", k_MmMapIoSpaceEx);
     Provider::AddFuncImpl("MmCopyMemory", h_MmCopyMemory);
     Provider::AddFuncImpl("IoGetDeviceInterfaces", h_IoGetDeviceInterfaces);
+    Provider::AddFuncImpl("IoAllocateIrp", h_IoAllocateIrp);
+    Provider::AddFuncImpl("IoFreeIrp", h_IoFreeIrp);
+    Provider::AddFuncImpl("IoCancelIrp", h_IoCancelIrp);
+    Provider::AddFuncImpl("IoSetCancelRoutine", h_IoSetCancelRoutine);
+    Provider::AddFuncImpl("IoMarkIrpPending", h_IoMarkIrpPending);
+    Provider::AddFuncImpl("IofCallDriver", h_IofCallDriver);
+    Provider::AddFuncImpl("IoCallDriver", h_IoCallDriver);
+    Provider::AddFuncImpl("IoGetCurrentIrpStackLocation", h_IoGetCurrentIrpStackLocation);
+    Provider::AddFuncImpl("IoGetNextIrpStackLocation", h_IoGetNextIrpStackLocation);
+    Provider::AddFuncImpl("IoSkipCurrentIrpStackLocation", h_IoSkipCurrentIrpStackLocation);
+    Provider::AddFuncImpl("IoCopyCurrentIrpStackLocationToNext", h_IoCopyCurrentIrpStackLocationToNext);
+    Provider::AddFuncImpl("IoSetCompletionRoutine", h_IoSetCompletionRoutine);
+    Provider::AddFuncImpl("IoSetCompletionRoutineEx", h_IoSetCompletionRoutineEx);
+    Provider::AddFuncImpl("IoAttachDeviceToDeviceStack", h_IoAttachDeviceToDeviceStack);
+    Provider::AddFuncImpl("IoAttachDeviceToDeviceStackSafe", h_IoAttachDeviceToDeviceStackSafe);
+    Provider::AddFuncImpl("IoAttachDevice", h_IoAttachDevice);
+    Provider::AddFuncImpl("IoDetachDevice", h_IoDetachDevice);
+    Provider::AddFuncImpl("IoGetAttachedDevice", h_IoGetAttachedDevice);
     Provider::AddFuncImpl("ZwDeviceIoControlFile", h_ZwDeviceIoControlFile);
     Provider::AddFuncImpl("NtDeviceIoControlFile", h_ZwDeviceIoControlFile);
     Provider::AddFuncImpl("ExGetFirmwareEnvironmentVariable", h_ExGetFirmwareEnvironmentVariable);
@@ -194,6 +204,15 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("MmGetPhysicalMemoryRanges", h_MmGetPhysicalMemoryRanges);
     Provider::AddFuncImpl("MmGetPhysicalAddress", h_MmGetPhysicalAddress);
     Provider::AddFuncImpl("_vsnwprintf", h__vsnwprintf);
+    Provider::AddFuncImpl("_vsnwprintf_s", h__vsnwprintf_s);
+    Provider::AddFuncImpl("strncpy_s", h_strncpy_s);
+    Provider::AddFuncImpl("ExQueryDepthSList", h_ExQueryDepthSList);
+    Provider::AddFuncImpl("RtlInitWeakEnumerationHashTable", h_RtlInitWeakEnumerationHashTable);
+    Provider::AddFuncImpl("RtlEndWeakEnumerationHashTable", h_RtlEndWeakEnumerationHashTable);
+    Provider::AddFuncImpl("RtlWeaklyEnumerateEntryHashTable", h_RtlWeaklyEnumerateEntryHashTable);
+    Provider::AddFuncImpl("KeAcquireInStackQueuedSpinLockAtDpcLevel", h_KeAcquireInStackQueuedSpinLockAtDpcLevel);
+    Provider::AddFuncImpl("KeReleaseInStackQueuedSpinLockFromDpcLevel", h_KeReleaseInStackQueuedSpinLockFromDpcLevel);
+    Provider::AddFuncImpl("PsRemoveCreateThreadNotifyRoutine", h_PsRemoveCreateThreadNotifyRoutine);
     Provider::AddFuncImpl("ZwOpenSection", h_ZwOpenSection);
     Provider::AddFuncImpl("ZwOpenEvent", h_ZwOpenEvent);
     Provider::AddFuncImpl("MmGetSystemRoutineAddress", h_MmGetSystemRoutineAddress);
@@ -202,7 +221,6 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("PsSetCreateProcessNotifyRoutineEx", h_PsSetCreateProcessNotifyRoutineEx);
     Provider::AddFuncImpl("PsSetCreateProcessNotifyRoutine", h_PsSetCreateProcessNotifyRoutineEx);
     Provider::AddFuncImpl("KeAcquireSpinLockRaiseToDpc", h_KeAcquireSpinLockRaiseToDpc);
-    Provider::AddFuncImpl("PsRemoveCreateThreadNotifyRoutine", h_PsRemoveLoadImageNotifyRoutine);
     Provider::AddFuncImpl("KeReleaseSpinLock", h_KeReleaseSpinLock);
     Provider::AddFuncImpl("ExpInterlockedPopEntrySList", h_ExpInterlockedPopEntrySList);
     Provider::AddFuncImpl("KeDelayExecutionThread", h_KeDelayExecutionThread);
@@ -335,6 +353,7 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("ObGetObjectType", h_ObGetObjectType);
     Provider::AddFuncImpl("KdChangeOption", h_KdChangeOption);
     Provider::AddFuncImpl("KdSystemDebugControl", h_KdSystemDebugControl);
+    Provider::AddFuncImpl("ZwSystemDebugControl", h_ZwSystemDebugControl);
 
     auto BcryptDll = LoadLibraryA("bcrypt.dll");
     if (BcryptDll) {

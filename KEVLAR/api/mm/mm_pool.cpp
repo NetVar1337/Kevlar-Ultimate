@@ -1,5 +1,6 @@
 #include "include/common.h"
 #include "mm_pool.h"
+#include "core/memory/guest_memory_runtime.h"
 #include <malloc.h>
 
 void* hM_AllocPool(uint32_t pooltype, size_t size);
@@ -16,33 +17,19 @@ PVOID h_MmAllocateContiguousMemorySpecifyCache(SIZE_T NumberOfBytes, uintptr_t L
     Logger::Log("{BLU}\tLowest : %llx - Highest : %llx - Boundary : %llx - Cache Type : %d - Size : %08x{RESET}\n", LowestAcceptableAddress, HighestAcceptableAddress,
         BoundaryAddressMultiple, CacheType, NumberOfBytes);
     AllocatedContiguous = (uint64_t)hM_AllocPool(CacheType, NumberOfBytes);
+    if (AllocatedContiguous) {
+        Kevlar::Memory::RegisterGuestRange(
+            AllocatedContiguous, NumberOfBytes, true);
+    }
     return (PVOID)AllocatedContiguous;
 }
 
 
-unsigned long long h_MmGetPhysicalAddress(uint64_t BaseAddress) { //To test shit
-
-    Logger::Log("{BLU}\tGetting Physical address for %llx{RESET}\n", BaseAddress);
-    uint64_t ret = BaseAddress/0x1000;
-
-    if (BaseAddress == AllocatedContiguous) {
-        Logger::Log("{BLU}\tGetting physical for last Contiguous Allocated Memory.{RESET}\n");
-        ret = 0xb0000000;
-    }
-    if (BaseAddress == 0xf0f87c3e1000) {
-        ret = 0x1ad000;
-    } else if (BaseAddress == 0xfb7dbedf6000) {
-        ret = 0x200000;
-    } else if (BaseAddress == 0xfbfdfeff7000) {
-        ret = 0x200000;
-    } else if (BaseAddress == 0xfc7e3f1f8000) {
-        ret = 0x200000;
-    } else if (BaseAddress == 0xfcfe7f3f9000) {
-        ret = 0x200000;
-    }
-
-    Logger::Log("{GRY}\tReturn : %llx{RESET}\n", ret);
-    return ret;
+unsigned long long h_MmGetPhysicalAddress(uint64_t BaseAddress) {
+    const auto Physical = Kevlar::Memory::TranslateOrMapGuestAddress(BaseAddress);
+    Logger::Log("{BLU}\tMmGetPhysicalAddress: VA=0x%llx -> PA=0x%llx{RESET}\n",
+        BaseAddress, Physical);
+    return Physical;
 }
 
 PVOID k_MmMapIoSpaceEx(

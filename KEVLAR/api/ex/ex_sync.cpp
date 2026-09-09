@@ -51,6 +51,13 @@ void h_ExReleaseFastMutex(PFAST_MUTEX FastMutex) {
 
 _SLIST_ENTRY* h_ExpInterlockedPopEntrySList(PSLIST_HEADER SListHead) { return 0; }
 
+USHORT h_ExQueryDepthSList(PSLIST_HEADER SListHead) {
+    auto HostHead = UcPtr(SListHead);
+    if (!HostHead)
+        return 0;
+    return *reinterpret_cast<volatile USHORT*>(HostHead);
+}
+
 void h_ExAcquireFastMutexUnsafe(PFAST_MUTEX FastMutex) {
     uint64_t HostMutex = 0;
     {

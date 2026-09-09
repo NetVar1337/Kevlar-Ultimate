@@ -3,6 +3,7 @@
 #include "core/registry/virtual_fs.h"
 #include "core/process/unicorn_threading.h"
 #include "core/io/io_manager.h"
+#include <algorithm>
 
 NTSTATUS h_ZwClose(HANDLE Handle);
 
@@ -39,9 +40,66 @@ namespace DeviceTracker {
     }
 }
 
+namespace {
+
+_DEVICE_OBJECT* ResolveDevice(uint64_t Address) {
+    if (!Address)
+        return nullptr;
+    uint64_t Base = 0;
+    uint64_t Size = 0;
+    void* Host = nullptr;
+    if (!UnicornMem::FindAllocation(Address, Base, Host, Size) || Address < Base)
+        return nullptr;
+    uint64_t Offset = Address - Base;
+    if (Offset > Size || sizeof(_DEVICE_OBJECT) > Size - Offset)
+        return nullptr;
+    return (_DEVICE_OBJECT*)((unsigned char*)Host + Offset);
+}
+
+uint64_t TopDeviceLocked(uint64_t Address) {
+    uint64_t Current = Address;
+    for (unsigned Depth = 0; Depth < 128; ++Depth) {
+        auto Device = ResolveDevice(Current);
+        if (!Device)
+            return 0;
+        uint64_t Attached = (uint64_t)Device->AttachedDevice;
+        if (!Attached)
+            return Current;
+        if (Attached == Current)
+            return 0;
+        Current = Attached;
+    }
+    return 0;
+}
+
+DeviceTracker::DeviceInfo* TrackedDeviceLocked(uint64_t Address) {
+    for (auto& Device : DeviceTracker::Devices) {
+        if (Device.UcAddr == Address)
+            return &Device;
+    }
+    return nullptr;
+}
+
+bool WriteAttachedDevice(uint64_t OutputAddress, uint64_t Value) {
+    uint64_t Base = 0;
+    uint64_t Size = 0;
+    void* Host = nullptr;
+    if (!UnicornMem::FindAllocation(OutputAddress, Base, Host, Size) || OutputAddress < Base)
+        return false;
+    const uint64_t Offset = OutputAddress - Base;
+    if (Offset > Size || sizeof(_DEVICE_OBJECT*) > Size - Offset)
+        return false;
+    *(_DEVICE_OBJECT**)((unsigned char*)Host + Offset) = (_DEVICE_OBJECT*)Value;
+    return true;
+}
+
+} // namespace
+
 NTSTATUS h_IoCreateDevice(_DRIVER_OBJECT* DriverObject, ULONG DeviceExtensionSize, PUNICODE_STRING DeviceName, DWORD DeviceType,
     ULONG DeviceCharacteristics, BOOLEAN Exclusive, _DEVICE_OBJECT** DeviceObject) {
     uint64_t DevUcAddr = UnicornMem::AllocateVariable(UnicornThread::GetCurrentEngine(), sizeof(_DEVICE_OBJECT) + DeviceExtensionSize, "CreatedDeviceObject");
+    if (!DevUcAddr)
+        return STATUS_INSUFFICIENT_RESOURCES;
     auto RealDevice = (_DEVICE_OBJECT*)UnicornMem::UcToHost(DevUcAddr);
 
     memset(RealDevice, 0, sizeof(_DEVICE_OBJECT));
@@ -52,6 +110,7 @@ NTSTATUS h_IoCreateDevice(_DRIVER_OBJECT* DriverObject, ULONG DeviceExtensionSiz
     RealDevice->ReferenceCount = 1;
     RealDevice->DriverObject = DriverObject;
     RealDevice->NextDevice = 0;
+    RealDevice->StackSize = 1;
 
     if (DeviceExtensionSize) {
         RealDevice->DeviceExtension = (PVOID)(DevUcAddr + sizeof(_DEVICE_OBJECT));
@@ -243,60 +302,84 @@ NTSTATUS h_IoWMIOpenBlock(LPCGUID Guid, ULONG DesiredAccess, PVOID* DataBlockObj
 
 NTSTATUS h_IoWMIQueryAllData(PVOID DataBlockObject, PULONG InOutBufferSize, PVOID OutBuffer) { return STATUS_SUCCESS; }
 
-//todo impl
 void h_IofCompleteRequest(void* pirp, CHAR boost) {
-    __try {
-        uint64_t IrpUcAddr = (uint64_t)pirp;
-        auto HostIrp = (_IRP*)UcPtr((_IRP*)pirp);
-        if (!HostIrp) return;
+    (void)boost;
+    IoManager::CompleteRequest((uint64_t)pirp);
+}
 
-        Logger::Log("{GRY}IofCompleteRequest: IRP=0x%llx Status=0x%08x Info=%llu{RESET}\n",
-            IrpUcAddr, HostIrp->IoStatus.Status, HostIrp->IoStatus.Information);
+_IRP* h_IoAllocateIrp(CCHAR StackSize, BOOLEAN ChargeQuota) {
+    (void)ChargeQuota;
+    uc_engine* Uc = UnicornThread::GetCurrentEngine();
+    if (!Uc)
+        Uc = UnicornEmu::PrimaryEngine;
+    return (_IRP*)IoManager::AllocateIrp(Uc, StackSize);
+}
 
-        #define IRP_BUFFERED_IO   0x00000010
-        #define IRP_INPUT_OPERATION 0x00000040
+void h_IoFreeIrp(_IRP* Irp) {
+    IoManager::FreeIrp((uint64_t)Irp);
+}
 
-        if ((HostIrp->Flags & IRP_BUFFERED_IO) &&
-            (HostIrp->Flags & IRP_INPUT_OPERATION) &&
-            HostIrp->IoStatus.Information > 0) {
-            auto SysBuf = UcPtr((void*)HostIrp->AssociatedIrp.SystemBuffer);
-            auto UserBuf = UcPtr(HostIrp->UserBuffer);
-            if (SysBuf && UserBuf && SysBuf != UserBuf) {
-                __try {
-                    memcpy(UserBuf, SysBuf, (size_t)HostIrp->IoStatus.Information);
-                } __except (EXCEPTION_EXECUTE_HANDLER) {
-                    Logger::Log("{RED}IofCompleteRequest: exception copying SystemBuffer->UserBuffer{RESET}\n");
-                }
-            }
-        }
+BOOLEAN h_IoCancelIrp(_IRP* Irp) {
+    return IoManager::CancelIrp((uint64_t)Irp);
+}
 
-        if (HostIrp->UserIosb) {
-            __try {
-                auto HostUserIosb = (_IO_STATUS_BLOCK*)UcPtr((_IO_STATUS_BLOCK*)HostIrp->UserIosb);
-                if (HostUserIosb) {
-                    HostUserIosb->Status = HostIrp->IoStatus.Status;
-                    HostUserIosb->Information = HostIrp->IoStatus.Information;
-                }
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                Logger::Log("{RED}IofCompleteRequest: exception writing UserIosb{RESET}\n");
-            }
-        }
+PVOID h_IoSetCancelRoutine(_IRP* Irp, PVOID CancelRoutine) {
+    return (PVOID)IoManager::ExchangeCancelRoutine((uint64_t)Irp, (uint64_t)CancelRoutine);
+}
 
-        if (HostIrp->UserEvent) {
-            __try {
-                auto EventUcAddr = (uintptr_t)HostIrp->UserEvent;
-                auto hEvent = HandleManager::GetHandle(EventUcAddr);
-                if (hEvent)
-                    SetEvent((HANDLE)hEvent);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                Logger::Log("{RED}IofCompleteRequest: exception signaling UserEvent{RESET}\n");
-            }
-        }
+void h_IoMarkIrpPending(_IRP* Irp) {
+    if (!IoManager::MarkIrpPending((uint64_t)Irp))
+        Logger::Log("{RED}IoMarkIrpPending rejected IRP=0x%llx{RESET}\n", (uint64_t)Irp);
+}
 
-        IoManager::SignalCompletion(IrpUcAddr, HostIrp->IoStatus.Status, HostIrp->IoStatus.Information);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Logger::Log("{RED}IofCompleteRequest: outer exception 0x%08x{RESET}\n", GetExceptionCode());
+NTSTATUS h_IofCallDriver(_DEVICE_OBJECT* DeviceObject, _IRP* Irp) {
+    return IoManager::CallDriver((uint64_t)DeviceObject, (uint64_t)Irp);
+}
+
+NTSTATUS h_IoCallDriver(_DEVICE_OBJECT* DeviceObject, _IRP* Irp) {
+    return h_IofCallDriver(DeviceObject, Irp);
+}
+
+_IO_STACK_LOCATION* h_IoGetCurrentIrpStackLocation(_IRP* Irp) {
+    return (_IO_STACK_LOCATION*)IoManager::GetCurrentStackLocation((uint64_t)Irp);
+}
+
+_IO_STACK_LOCATION* h_IoGetNextIrpStackLocation(_IRP* Irp) {
+    return (_IO_STACK_LOCATION*)IoManager::GetNextStackLocation((uint64_t)Irp);
+}
+
+void h_IoSkipCurrentIrpStackLocation(_IRP* Irp) {
+    if (!IoManager::SkipCurrentStackLocation((uint64_t)Irp))
+        Logger::Log("{RED}IoSkipCurrentIrpStackLocation rejected IRP=0x%llx{RESET}\n", (uint64_t)Irp);
+}
+
+void h_IoCopyCurrentIrpStackLocationToNext(_IRP* Irp) {
+    if (!IoManager::CopyCurrentStackLocationToNext((uint64_t)Irp))
+        Logger::Log("{RED}IoCopyCurrentIrpStackLocationToNext rejected IRP=0x%llx{RESET}\n", (uint64_t)Irp);
+}
+
+void h_IoSetCompletionRoutine(
+    _IRP* Irp, PVOID CompletionRoutine, PVOID Context,
+    BOOLEAN InvokeOnSuccess, BOOLEAN InvokeOnError, BOOLEAN InvokeOnCancel)
+{
+    if (!IoManager::SetCompletionRoutine(
+            (uint64_t)Irp, (uint64_t)CompletionRoutine, (uint64_t)Context,
+            InvokeOnSuccess != FALSE, InvokeOnError != FALSE, InvokeOnCancel != FALSE)) {
+        Logger::Log("{RED}IoSetCompletionRoutine rejected IRP=0x%llx Routine=0x%llx{RESET}\n",
+            (uint64_t)Irp, (uint64_t)CompletionRoutine);
     }
+}
+
+NTSTATUS h_IoSetCompletionRoutineEx(
+    _DEVICE_OBJECT* DeviceObject, _IRP* Irp, PVOID CompletionRoutine, PVOID Context,
+    BOOLEAN InvokeOnSuccess, BOOLEAN InvokeOnError, BOOLEAN InvokeOnCancel)
+{
+    (void)DeviceObject;
+    return IoManager::SetCompletionRoutine(
+        (uint64_t)Irp, (uint64_t)CompletionRoutine, (uint64_t)Context,
+        InvokeOnSuccess != FALSE, InvokeOnError != FALSE, InvokeOnCancel != FALSE)
+        ? STATUS_SUCCESS
+        : STATUS_INVALID_PARAMETER;
 }
 
 NTSTATUS h_IoGetDeviceInterfaces(
@@ -332,8 +415,117 @@ NTSTATUS h_IoCreateNotificationEvent(PUNICODE_STRING EventName, PHANDLE EventHan
     return STATUS_SUCCESS;
 }
 
+_DEVICE_OBJECT* h_IoAttachDeviceToDeviceStack(
+    _DEVICE_OBJECT* SourceDevice, _DEVICE_OBJECT* TargetDevice)
+{
+    const uint64_t SourceAddress = (uint64_t)SourceDevice;
+    const uint64_t TargetAddress = (uint64_t)TargetDevice;
+    std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
+    auto Source = ResolveDevice(SourceAddress);
+    uint64_t TopAddress = TopDeviceLocked(TargetAddress);
+    auto Top = ResolveDevice(TopAddress);
+    if (!Source || !Top || SourceAddress == TopAddress)
+        return nullptr;
+
+    auto TrackedSource = TrackedDeviceLocked(SourceAddress);
+    if (TrackedSource && TrackedSource->AttachedToUcAddr)
+        return nullptr;
+    for (uint64_t Current = TargetAddress; Current;) {
+        if (Current == SourceAddress)
+            return nullptr;
+        auto Device = ResolveDevice(Current);
+        if (!Device)
+            return nullptr;
+        Current = (uint64_t)Device->AttachedDevice;
+    }
+
+    Top->AttachedDevice = (_DEVICE_OBJECT*)SourceAddress;
+    Source->StackSize = (CHAR)std::min<int>(127, std::max<int>(1, Top->StackSize) + 1);
+    if (TrackedSource)
+        TrackedSource->AttachedToUcAddr = TopAddress;
+    Logger::Log("{CYN}IoAttachDeviceToDeviceStack source=0x%llx lower=0x%llx{RESET}\n",
+        SourceAddress, TopAddress);
+    return (_DEVICE_OBJECT*)TopAddress;
+}
+
+NTSTATUS h_IoAttachDeviceToDeviceStackSafe(
+    _DEVICE_OBJECT* SourceDevice, _DEVICE_OBJECT* TargetDevice,
+    _DEVICE_OBJECT** AttachedToDeviceObject)
+{
+    if (!AttachedToDeviceObject ||
+        !WriteAttachedDevice((uint64_t)AttachedToDeviceObject, 0))
+        return STATUS_INVALID_PARAMETER;
+    auto Lower = h_IoAttachDeviceToDeviceStack(SourceDevice, TargetDevice);
+    if (!Lower)
+        return STATUS_NO_SUCH_DEVICE;
+    return WriteAttachedDevice((uint64_t)AttachedToDeviceObject, (uint64_t)Lower)
+        ? STATUS_SUCCESS
+        : STATUS_INVALID_PARAMETER;
+}
+
+NTSTATUS h_IoAttachDevice(
+    _DEVICE_OBJECT* SourceDevice, PUNICODE_STRING TargetDevice,
+    _DEVICE_OBJECT** AttachedDevice)
+{
+    auto Name = (UNICODE_STRING*)UnicornMem::UcToHost((uint64_t)TargetDevice);
+    if (!Name || !Name->Buffer || !AttachedDevice)
+        return STATUS_INVALID_PARAMETER;
+    uint64_t BufferBase = 0;
+    uint64_t BufferSize = 0;
+    void* BufferHost = nullptr;
+    const uint64_t BufferAddress = (uint64_t)Name->Buffer;
+    if (!UnicornMem::FindAllocation(BufferAddress, BufferBase, BufferHost, BufferSize) ||
+        BufferAddress < BufferBase ||
+        BufferAddress - BufferBase > BufferSize ||
+        Name->Length > BufferSize - (BufferAddress - BufferBase))
+        return STATUS_INVALID_PARAMETER;
+    auto Buffer = (wchar_t*)((unsigned char*)BufferHost + (BufferAddress - BufferBase));
+    std::wstring TargetName(Buffer, Name->Length / sizeof(wchar_t));
+    uint64_t TargetAddress = DeviceTracker::FindByName(TargetName);
+    if (!TargetAddress)
+        return STATUS_NO_SUCH_DEVICE;
+    return h_IoAttachDeviceToDeviceStackSafe(
+        SourceDevice, (_DEVICE_OBJECT*)TargetAddress, AttachedDevice);
+}
+
+void h_IoDetachDevice(_DEVICE_OBJECT* TargetDevice) {
+    const uint64_t TargetAddress = (uint64_t)TargetDevice;
+    std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
+    auto Target = ResolveDevice(TargetAddress);
+    if (!Target)
+        return;
+    const uint64_t UpperAddress = (uint64_t)Target->AttachedDevice;
+    auto Upper = ResolveDevice(UpperAddress);
+    if (!Upper)
+        return;
+
+    const uint64_t SuccessorAddress = (uint64_t)Upper->AttachedDevice;
+    Target->AttachedDevice = (_DEVICE_OBJECT*)SuccessorAddress;
+    Upper->AttachedDevice = nullptr;
+    Upper->StackSize = 1;
+    if (auto Entry = TrackedDeviceLocked(UpperAddress))
+        Entry->AttachedToUcAddr = 0;
+    if (auto Entry = TrackedDeviceLocked(SuccessorAddress))
+        Entry->AttachedToUcAddr = TargetAddress;
+    if (auto Successor = ResolveDevice(SuccessorAddress))
+        Successor->StackSize = (CHAR)std::min<int>(127, std::max<int>(1, Target->StackSize) + 1);
+    Logger::Log("{CYN}IoDetachDevice lower=0x%llx detached=0x%llx{RESET}\n",
+        TargetAddress, UpperAddress);
+}
+
+PVOID h_IoGetAttachedDevice(_DEVICE_OBJECT* DeviceObject) {
+    std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
+    return (PVOID)TopDeviceLocked((uint64_t)DeviceObject);
+}
+
 PVOID h_IoGetAttachedDeviceReference(_DEVICE_OBJECT* DeviceObject) {
-    return DeviceObject;
+    std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
+    uint64_t TopAddress = TopDeviceLocked((uint64_t)DeviceObject);
+    auto Top = ResolveDevice(TopAddress);
+    if (!Top)
+        return nullptr;
+    ++Top->ReferenceCount;
+    return (PVOID)TopAddress;
 }
 
 NTSTATUS h_IoRegisterPlugPlayNotification(uint32_t EventCategory, ULONG EventCategoryFlags, PVOID EventCategoryData, PVOID DriverObject, PVOID CallbackRoutine, PVOID Context, PVOID* NotificationEntry) {

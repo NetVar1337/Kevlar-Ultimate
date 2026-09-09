@@ -4,6 +4,7 @@
 #include "core/exec/unicorn_engine_internal.h"
 #include "core/memory/unicorn_memory.h"
 #include "core/diagnostics/diag_center.h"
+#include "core/loader/environment.h"
 
 static uint64_t gNtQueryLastClass = 0;
 static uint64_t gNtQueryLastCallerRva = 0;
@@ -353,10 +354,12 @@ static bool IsBlacklistedModule(const char* ModuleName) {
         "hcmon.sys", "vmnetadapter.sys", "vmnat.sys", "vmnetdhcp.sys",
         "vboxguest.sys", "vboxsf.sys", "vboxmouse.sys", "vboxvideo.sys",
         "vboxdrv.sys", "vboxnetadp.sys", "vboxnetflt.sys",
-        "parsecvusba.sys",
-        "droidcamvideo.sys", "droidcamaudio.sys",
-        "iriuna0.sys",
-        "vbaudio_cable64_win10.sys",
+        "parsecvusba.sys", "droidcamvideo.sys", "droidcamaudio.sys",
+        "iriuna0.sys", "vbaudio_cable64_win10.sys",
+        "vmbus.sys", "vmsproxy.sys", "vmsproxyhnic.sys", "winhvr.sys",
+        "vid.sys", "hypervideo.sys", "storvsp.sys", "netvsc.sys",
+        "npcap.sys", "vigembus.sys",
+        "vmbkmclr.sys", "hvservice.sys", "vmstorfl.sys",
     };
     std::string NameLower = ModuleName;
     for (auto& C : NameLower) C = (char)tolower(C);
@@ -469,6 +472,83 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
             }
         }
     };
+
+    if (SystemInformationClass == 0x0B) {
+        std::vector<RTL_PROCESS_MODULE_INFORMATION> Modules;
+        auto ListHead = reinterpret_cast<uint64_t>(Environment::PsLoadedModuleList);
+        uint64_t Current = UnicornMem::UcToHost(ListHead) ? ListHead : 0;
+        bool FirstEntry = true;
+
+        while (Current && (FirstEntry || Current != ListHead) && Modules.size() < 300) {
+            FirstEntry = false;
+            auto Entry = reinterpret_cast<KLDR_DATA_TABLE_ENTRY*>(UnicornMem::UcToHost(Current));
+            if (!Entry)
+                break;
+
+            char BaseName[MAX_PATH] = {};
+            char FullName[256] = {};
+            auto GuestBaseName = reinterpret_cast<const wchar_t*>(
+                UnicornMem::UcToHost(reinterpret_cast<uint64_t>(Entry->BaseDllName.Buffer)));
+            auto GuestFullName = reinterpret_cast<const wchar_t*>(
+                UnicornMem::UcToHost(reinterpret_cast<uint64_t>(Entry->FullDllName.Buffer)));
+            if (GuestBaseName) {
+                WideCharToMultiByte(CP_ACP, 0, GuestBaseName,
+                    Entry->BaseDllName.Length / sizeof(wchar_t),
+                    BaseName, sizeof(BaseName) - 1, nullptr, nullptr);
+            }
+            if (GuestFullName) {
+                WideCharToMultiByte(CP_ACP, 0, GuestFullName,
+                    Entry->FullDllName.Length / sizeof(wchar_t),
+                    FullName, sizeof(FullName) - 1, nullptr, nullptr);
+            }
+
+            if (BaseName[0] && !IsBlacklistedModule(BaseName)) {
+                RTL_PROCESS_MODULE_INFORMATION Module = {};
+                Module.Section = Entry->SectionPointer
+                    ? Entry->SectionPointer : reinterpret_cast<void*>(Current);
+                Module.MappedBase = reinterpret_cast<uint64_t>(Entry->DllBase);
+                Module.ImageBase = reinterpret_cast<uint64_t>(Entry->DllBase);
+                Module.ImageSize = Entry->SizeOfImage;
+                Module.Flags = Entry->Flags;
+                Module.LoadOrderIndex = static_cast<USHORT>(Modules.size());
+                Module.InitOrderIndex = Module.LoadOrderIndex;
+                Module.LoadCount = Entry->LoadCount;
+
+                const char* SourcePath = FullName[0] ? FullName : BaseName;
+                strncpy_s(reinterpret_cast<char*>(Module.FullPathName),
+                    sizeof(Module.FullPathName), SourcePath, _TRUNCATE);
+                auto LastSlash = strrchr(reinterpret_cast<char*>(Module.FullPathName), '\\\\');
+                Module.OffsetToFileName = LastSlash
+                    ? static_cast<USHORT>(LastSlash + 1 - reinterpret_cast<char*>(Module.FullPathName))
+                    : 0;
+                Modules.push_back(Module);
+            }
+
+            Current = reinterpret_cast<uint64_t>(Entry->InLoadOrderLinks.Flink);
+        }
+
+        const ULONG RequiredSize = static_cast<ULONG>(
+            offsetof(RTL_PROCESS_MODULES, Modules)
+            + Modules.size() * sizeof(RTL_PROCESS_MODULE_INFORMATION));
+        WriteRetLen(RequiredSize);
+        if (!SystemInformation || SystemInformationLength < RequiredSize) {
+            Logger::Log("  {CYN}Synthetic SystemModuleInformation size=0x%x modules=%zu -> STATUS_INFO_LENGTH_MISMATCH{RESET}\n",
+                RequiredSize, Modules.size());
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+
+        std::vector<uint8_t> Response(RequiredSize);
+        auto Header = reinterpret_cast<RTL_PROCESS_MODULES*>(Response.data());
+        Header->NumberOfModules = static_cast<ULONG>(Modules.size());
+        if (!Modules.empty()) {
+            memcpy(Header->Modules, Modules.data(),
+                Modules.size() * sizeof(RTL_PROCESS_MODULE_INFORMATION));
+        }
+        WriteBuf(Response.data(), RequiredSize);
+        Logger::Log("  {GRN}Synthetic SystemModuleInformation returned %zu coherent modules (%u bytes){RESET}\n",
+            Modules.size(), RequiredSize);
+        return STATUS_SUCCESS;
+    }
 
     if (SystemInformationClass == 0x5A) {
         ULONG RequiredSize = 0x20;
@@ -740,7 +820,8 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
                 }
             }
 
-            if (!HyperVideoInjected && (ULONG)WriteIdx < MaxModulesByLen) {
+            if (UnicornEmu::HyperVideoInjectionEnabled
+                && !HyperVideoInjected && (ULONG)WriteIdx < MaxModulesByLen) {
                 auto& hvMod = loadedmodules->Modules[WriteIdx];
                 memset(&hvMod, 0, sizeof(hvMod));
                 uint64_t hvBase = 0xFFFFF80301000000ULL;

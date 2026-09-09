@@ -88,14 +88,13 @@ void UnicornEmu::InitTimingSpoofing() {
     QpcFrequency = Freq.QuadPart;
     EmulationStartQpc = StartQpc.QuadPart;
 
-    EmulationStartSystemTime = CpuProfile::kEmulatedSystemTimeBase;
+    EmulationStartSystemTime = CpuProfile::EmulatedSystemTimeBase();
 
-    // Aligned with CpuProfile leaf 0x15 (38.4MHz * 168 / 2 = 3.2256 GHz) so a
-    // driver that derives frequency from CPUID sees the same rate RDTSC uses.
-    TscPerQpcTick = (double)CpuProfile::kProfileTscHz / (double)QpcFrequency;
+    // Keep CPUID leaf 0x15 and emulated TSC progression on the same profile.
+    TscPerQpcTick = (double)CpuProfile::ProfileTscHz() / (double)QpcFrequency;
 
     HookTimeAccumulated = 0;
-    VirtualTsc = CpuProfile::kInitialVirtualTsc;
+    VirtualTsc = CpuProfile::InitialVirtualTsc();
 
     Logger::Log("{GRN}Timing spoofing initialized: QpcFreq=%lld TscPerQpc=%.2f{RESET}\n",
         QpcFrequency, TscPerQpcTick);

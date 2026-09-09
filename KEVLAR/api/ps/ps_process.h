@@ -1,5 +1,42 @@
 #pragma once
 #include "include/common.h"
+#include <string>
+
+namespace PsCallbacks {
+
+struct ProcessEvent {
+    uint64_t Process = 0;
+    uint64_t ProcessId = 0;
+    uint64_t ParentProcessId = 0;
+    uint64_t CreatingProcessId = 0;
+    uint64_t CreatingThreadId = 0;
+    uint64_t FileObject = 0;
+    uint32_t Flags = 0;
+    uint32_t NotifyType = 0;
+    NTSTATUS CreationStatus = STATUS_SUCCESS;
+    bool Create = true;
+    std::wstring ImageFileName;
+    std::wstring CommandLine;
+};
+
+struct ImageEvent {
+    std::wstring FullImageName;
+    uint64_t ProcessId = 0;
+    uint64_t ImageBase = 0;
+    uint64_t ImageSize = 0;
+    uint32_t ImageSelector = 0;
+    uint32_t ImageSectionNumber = 0;
+    uint32_t Properties = 0;
+};
+
+NTSTATUS TriggerProcess(uc_engine* Engine, ProcessEvent& Event);
+NTSTATUS TriggerThread(uc_engine* Engine, uint64_t ProcessId, uint64_t ThreadId, bool Create);
+NTSTATUS TriggerImage(uc_engine* Engine, const ImageEvent& Event);
+size_t ProcessCallbackCount();
+size_t ThreadCallbackCount();
+size_t ImageCallbackCount();
+
+}
 
 PVOID h_PsGetProcessWow64Process(_EPROCESS* Process);
 _PEB* h_PsGetProcessPeb(_EPROCESS* process);
@@ -18,6 +55,7 @@ NTSTATUS h_PsSetCreateProcessNotifyRoutineEx(void* NotifyRoutine, BOOLEAN Remove
 NTSTATUS h_PsCreateSystemThread(PHANDLE ThreadHandle, ULONG DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes, HANDLE ProcessHandle, void* ClientId, void* StartRoutine, PVOID StartContext);
 NTSTATUS h_PsTerminateSystemThread(NTSTATUS exitstatus);
 NTSTATUS h_PsSetCreateThreadNotifyRoutine(PVOID NotifyRoutine);
+NTSTATUS h_PsRemoveCreateThreadNotifyRoutine(PVOID NotifyRoutine);
 NTSTATUS h_PsSetLoadImageNotifyRoutine(PVOID NotifyRoutine);
 NTSTATUS h_PsLookupThreadByThreadId(HANDLE ThreadId, PVOID* Thread);
 HANDLE h_PsGetThreadId(_ETHREAD* Thread);

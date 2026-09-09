@@ -79,7 +79,7 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_
     return R;
 }
 
-bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
+bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMainMode) {
     uint64_t StackTop = STACK_BASE_UC + STACK_SIZE_UC - 0x100;
     uc_reg_write(Uc, UC_X86_REG_RSP, &StackTop);
 
@@ -90,11 +90,12 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
     uc_mem_write(Uc, StackTop, &RetAddr, 8);
     uc_reg_write(Uc, UC_X86_REG_RSP, &StackTop);
 
-    uint64_t Rcx = DRIVER_OBJ_BASE_UC;
-    uint64_t Rdx = REGISTRY_PATH_BASE_UC;
+    uint64_t Rcx = DllMainMode ? DRIVER_BASE_UC : DRIVER_OBJ_BASE_UC;
+    uint64_t Rdx = DllMainMode ? 1 : REGISTRY_PATH_BASE_UC;
+    uint64_t R8 = 0;
     uc_reg_write(Uc, UC_X86_REG_RCX, &Rcx);
     uc_reg_write(Uc, UC_X86_REG_RDX, &Rdx);
-
+    uc_reg_write(Uc, UC_X86_REG_R8, &R8);
     uint64_t Rflags = 0x10286;
     uc_reg_write(Uc, UC_X86_REG_RFLAGS, &Rflags);
 
@@ -167,7 +168,8 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
         uc_reg_write(Uc, UC_X86_REG_RAX, &Rax);
     }
 
-    if (Rax != 0) {
+    const bool EntryFailed = DllMainMode ? (Rax == 0) : (Rax != 0);
+    if (EntryFailed) {
         uint64_t FinalRip = 0, FinalRsp = 0, FinalRcx = 0, FinalRdx = 0, FinalR8 = 0, FinalRbp = 0;
         uc_reg_read(Uc, UC_X86_REG_RIP, &FinalRip);
         uc_reg_read(Uc, UC_X86_REG_RSP, &FinalRsp);
@@ -210,20 +212,25 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
         }
     }
 
-    Logger::Log("{CYN}DriverEntry returned: {WHT}0x%llx{RESET}\n", Rax);
-    if (Rax == 0) Logger::Log("{GRN}  STATUS_SUCCESS{RESET}\n");
-    else if (Rax == 0xC0000001) Logger::Log("{RED}  STATUS_UNSUCCESSFUL{RESET}\n");
-    else if (Rax == 0xC0000002) Logger::Log("{RED}  STATUS_NOT_IMPLEMENTED{RESET}\n");
-    else if (Rax == 0xC0000005) Logger::Log("{RED}  STATUS_ACCESS_VIOLATION{RESET}\n");
-    else if (Rax == 0xC000000D) Logger::Log("{RED}  STATUS_INVALID_PARAMETER{RESET}\n");
-    else if (Rax == 0xC0000022) Logger::Log("{RED}  STATUS_ACCESS_DENIED{RESET}\n");
-    else if (Rax == 0xC0000034) Logger::Log("{RED}  STATUS_OBJECT_NAME_NOT_FOUND{RESET}\n");
-    else if (Rax == 0xC000007A) Logger::Log("{RED}  STATUS_PROCEDURE_NOT_FOUND{RESET}\n");
-    else if (Rax == 0xC00000BB) Logger::Log("{RED}  STATUS_NOT_SUPPORTED{RESET}\n");
-    else if (Rax == 0xC0000420) Logger::Log("{RED}  STATUS_ASSERTION_FAILURE{RESET}\n");
-    else if (Rax == 0xC0000423) Logger::Log("{RED}  STATUS_INCOMPATIBLE_DRIVER_BLOCKED{RESET}\n");
-    else if (Rax == 0xC0000424) Logger::Log("{RED}  STATUS_HIVE_UNLOADED{RESET}\n");
-    else Logger::Log("{RED}  NTSTATUS 0x%08x{RESET}\n", (uint32_t)Rax);
+    if (DllMainMode) {
+        Logger::Log("{CYN}DllMain returned: {WHT}0x%llx{RESET}\n", Rax);
+        Logger::Log(Rax ? "{GRN}  TRUE (success){RESET}\n" : "{RED}  FALSE (failure){RESET}\n");
+    } else {
+        Logger::Log("{CYN}DriverEntry returned: {WHT}0x%llx{RESET}\n", Rax);
+        if (Rax == 0) Logger::Log("{GRN}  STATUS_SUCCESS{RESET}\n");
+        else if (Rax == 0xC0000001) Logger::Log("{RED}  STATUS_UNSUCCESSFUL{RESET}\n");
+        else if (Rax == 0xC0000002) Logger::Log("{RED}  STATUS_NOT_IMPLEMENTED{RESET}\n");
+        else if (Rax == 0xC0000005) Logger::Log("{RED}  STATUS_ACCESS_VIOLATION{RESET}\n");
+        else if (Rax == 0xC000000D) Logger::Log("{RED}  STATUS_INVALID_PARAMETER{RESET}\n");
+        else if (Rax == 0xC0000022) Logger::Log("{RED}  STATUS_ACCESS_DENIED{RESET}\n");
+        else if (Rax == 0xC0000034) Logger::Log("{RED}  STATUS_OBJECT_NAME_NOT_FOUND{RESET}\n");
+        else if (Rax == 0xC000007A) Logger::Log("{RED}  STATUS_PROCEDURE_NOT_FOUND{RESET}\n");
+        else if (Rax == 0xC00000BB) Logger::Log("{RED}  STATUS_NOT_SUPPORTED{RESET}\n");
+        else if (Rax == 0xC0000420) Logger::Log("{RED}  STATUS_ASSERTION_FAILURE{RESET}\n");
+        else if (Rax == 0xC0000423) Logger::Log("{RED}  STATUS_INCOMPATIBLE_DRIVER_BLOCKED{RESET}\n");
+        else if (Rax == 0xC0000424) Logger::Log("{RED}  STATUS_HIVE_UNLOADED{RESET}\n");
+        else Logger::Log("{RED}  NTSTATUS 0x%08x{RESET}\n", (uint32_t)Rax);
+    }
 
     Logger::Log("{CYN}Total interrupts: %d{RESET}\n", TotalInterruptCount);
     if (TotalInterruptCount > 0) {
@@ -287,7 +294,7 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
     }
 
     Logger::Log("{CYN}RIP ring: %llu total instructions, dumping last %d:{RESET}\n", RipRingTotal, RIP_RING_SIZE);
-    if (Rax != 0 && RipRingIdx > 0) {
+    if (EntryFailed && RipRingIdx > 0) {
         int DumpCount = (RipRingIdx > RIP_RING_SIZE) ? RIP_RING_SIZE : RipRingIdx;
         int DumpStart = RipRingIdx - DumpCount;
         uint64_t PrevRax = 0;
@@ -318,5 +325,5 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
         }
     }
 
-    return true;
+    return DllMainMode ? (Rax != 0) : true;
 }

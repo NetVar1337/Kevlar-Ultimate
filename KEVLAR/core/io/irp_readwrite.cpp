@@ -145,6 +145,7 @@ static IoManager::DispatchResult DispatchWriteSeh(
     if (BytesWritten)
         *BytesWritten = (ULONG)Result.Information;
 
+    WaitForSingleObject(DispatchThread->HostThread, 5000);
     CompletionMapRemove(IrpUcAddr);
     CloseHandle(CompletionEvent);
     IoManager::FreeIrp(IrpUcAddr);
@@ -318,6 +319,7 @@ static IoManager::DispatchResult DispatchReadSeh(
     if (BytesRead)
         *BytesRead = (ULONG)Result.Information;
 
+    WaitForSingleObject(DispatchThread->HostThread, 5000);
     CompletionMapRemove(IrpUcAddr);
     CloseHandle(CompletionEvent);
     IoManager::FreeIrp(IrpUcAddr);

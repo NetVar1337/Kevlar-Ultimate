@@ -1,5 +1,37 @@
 #pragma once
 #include "include/common.h"
+#include <vector>
+
+namespace FltCallbacks {
+
+struct OperationEvent {
+    uint8_t MajorFunction = 0;
+    void* CallbackData = nullptr;
+    size_t CallbackDataSize = 0;
+    void* RelatedObjects = nullptr;
+    size_t RelatedObjectsSize = 0;
+    uint32_t PostOperationFlags = 0;
+};
+
+struct PostCallback {
+    uint64_t Function = 0;
+    uint64_t CompletionContext = 0;
+};
+
+struct OperationFrame {
+    uc_engine* Engine = nullptr;
+    uint64_t CallbackData = 0;
+    uint64_t RelatedObjects = 0;
+    std::vector<PostCallback> PostCallbacks;
+};
+
+NTSTATUS TriggerPre(uc_engine* Engine, OperationEvent& Event,
+    OperationFrame& Frame, uint32_t* PreOperationStatus = nullptr);
+NTSTATUS TriggerPost(OperationEvent& Event, OperationFrame& Frame);
+void ReleaseFrame(OperationFrame& Frame);
+size_t RegisteredCount();
+
+}
 
 NTSTATUS h_FltRegisterFilter(PVOID Driver, PVOID Registration, PVOID* RetFilter);
 NTSTATUS h_FltStartFiltering(PVOID Filter);

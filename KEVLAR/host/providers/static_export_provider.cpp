@@ -48,16 +48,15 @@ namespace ntoskrnl_export {
     }
 
     void InitializeRuntimeValues() {
-        auto Kusd = (uint8_t*)0x7FFE0000;
-
-        uint32_t BuildNumber = *(uint32_t*)(Kusd + 0x260);
+        const auto& Profile = Kevlar::Profile::Active();
+        uint32_t BuildNumber = Profile.BuildNumber;
         NtBuildNumber = (uint32_t)(0xF0000000UL | BuildNumber);
 
         MmSystemRangeStart = 0xFFFF800000000000ULL;
         MmUserProbeAddress = 0x7FFFFFFEFFFFULL;
         MmHighestUserAddress = 0x7FFFFFFEFFFFULL;
 
-        KeNumberProcessors = (uint8_t)CpuProfile::kLogicalProcessorCount;
+        KeNumberProcessors = (uint8_t)CpuProfile::LogicalProcessorCount();
 
         NlsAnsiCodePage = (uint16_t)GetACP();
         NlsOemCodePage = (uint16_t)GetOEMCP();

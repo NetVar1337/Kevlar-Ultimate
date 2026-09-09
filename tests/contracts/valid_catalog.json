@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "build": 26200,
+  "contracts": [
+    {
+      "module": "ntoskrnl.exe",
+      "name": "FixtureQuery",
+      "argument_count": 3,
+      "irql_ceiling": 1,
+      "return_policy": "ntstatus",
+      "output_buffers": [
+        {
+          "argument": 0,
+          "length_argument": 1,
+          "minimum_size": 8,
+          "direction": "out",
+          "nullable": false,
+          "writes_on_success_only": true
+        }
+      ],
+      "side_effects": ["buffer.write", "fixture.query"]
+    }
+  ]
+}

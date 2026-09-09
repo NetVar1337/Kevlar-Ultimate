@@ -1,0 +1,12 @@
+#include "../../KEVLAR/core/snapshot/emulator_snapshot.h"
+#include "../../KEVLAR/core/coverage/edge_coverage.h"
+#include "../../KEVLAR/core/fuzz/io_fuzzer.h"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <optional>
+#include <vector>
+int main(){using namespace Kevlar;std::vector<std::uint8_t> G(8192,0x41),R(8192);Snapshot::EmulatorSnapshot S(7,99);S.SetCpuState(std::array<std::uint8_t,3>{1,2,3});auto V=[](std::uint64_t A,std::size_t N){return A>=0x1000&&A-0x1000<=8192&&N<=8192-(A-0x1000);};assert(S.AddMappedMemory(0x1000,G.size(),7,V,[&](auto A,auto O){std::copy_n(G.begin()+(A-0x1000),O.size(),O.begin());return true;})==Snapshot::SnapshotError::None);auto I=S.Snapshot();assert(I.Pages.size()==1);auto B=S.Serialize();auto L=Snapshot::EmulatorSnapshot::Deserialize(B);assert(L.Ok()&&*L.Image==I);B.back()^=1;assert(Snapshot::EmulatorSnapshot::Deserialize(B).Error==Snapshot::SnapshotError::HashMismatch);Snapshot::EmulatorSnapshot C;assert(C.Restore(I)==Snapshot::SnapshotError::None);assert(C.RestoreMappedMemory(V,[&](auto A,auto X){std::copy(X.begin(),X.end(),R.begin()+(A-0x1000));return true;})==Snapshot::SnapshotError::None);assert(R==G);
+Coverage::EdgeCoverage E1,E2;auto A=[](std::uint64_t X)->std::optional<Coverage::ModuleLocation>{return Coverage::ModuleLocation{"driver.sys",X-0x100000};};auto D=[](std::uint64_t X)->std::optional<Coverage::ModuleLocation>{return Coverage::ModuleLocation{"driver.sys",X-0x900000};};assert(E1.RecordAbsolute(0x101000,0x102000,A)==true);assert(E2.RecordAbsolute(0x901000,0x902000,D)==true);assert(E1.Snapshot().Edges[0].Key==E2.Snapshot().Edges[0].Key);
+Fuzz::FuzzInput Seed;Seed.IoctlCode=0x222000;Seed.Buffer={0,1,2,3};Fuzz::IoMutator M1(123),M2(123);auto X=M1.Mutate(Seed),Y=M2.Mutate(Seed);assert(X==Y);assert(Fuzz::IoMutator::Replay(Seed,X.Mutation)==X.Input);Fuzz::ExecutionResult N;N.Coverage.Edges.push_back({{{"driver.sys",1},{"driver.sys",2}},1});Fuzz::FuzzCorpus Q;assert(Q.Admit(Seed,N).Admitted);assert(!Q.Admit(X.Input,N).Admitted);Fuzz::ExecutionResult K=N;K.Outcome=Fuzz::ExecutionOutcome::Crash;K.Crash=Fuzz::CrashSignature{0xc0000005,{"driver.sys",3},{{"driver.sys",1}}};assert(Q.Admit(X.Input,K).NewCrash);assert(!Q.Admit(Y.Input,K).Admitted);auto Run=[](const Fuzz::FuzzInput& Z,std::uint64_t J){Fuzz::ExecutionResult O;O.Coverage.Edges.push_back({{{"driver.sys",J},{"driver.sys",J+Z.Buffer.size()+1}},1});return O;};Fuzz::IoFuzzCampaign P1(55,{Seed}),P2(55,{Seed});assert(P1.Run(12,Run)==P2.Run(12,Run));return 0;}

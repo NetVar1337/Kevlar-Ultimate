@@ -310,6 +310,7 @@ static IoManager::DispatchResult DispatchDeviceIoControlSeh(
     if (BytesReturned)
         *BytesReturned = (ULONG)Result.Information;
 
+    WaitForSingleObject(DispatchThread->HostThread, 5000);
     CompletionMapRemove(IrpUcAddr);
     CloseHandle(CompletionEvent);
     IoManager::FreeIrp(IrpUcAddr);

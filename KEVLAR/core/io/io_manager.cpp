@@ -10,11 +10,13 @@ std::unordered_map<uint64_t, IoManager::IrpCompletionInfo> CompletionMap;
 std::mutex CompletionLock;
 
 void IoManager::Initialize() {
+    ResetLifecycle();
     std::lock_guard<std::mutex> Guard(CompletionLock);
     CompletionMap.clear();
 }
 
 void IoManager::Shutdown() {
+    ResetLifecycle();
     std::lock_guard<std::mutex> Guard(CompletionLock);
     for (auto& Pair : CompletionMap) {
         if (Pair.second.Event) {
@@ -28,20 +30,28 @@ void IoManager::Shutdown() {
 void IoManager::SignalCompletion(uint64_t IrpUcAddr, NTSTATUS Status, ULONG_PTR Information) {
     std::lock_guard<std::mutex> Guard(CompletionLock);
     auto It = CompletionMap.find(IrpUcAddr);
-    if (It != CompletionMap.end()) {
-        It->second.Status = Status;
-        It->second.Information = Information;
-        It->second.Completed = true;
-        if (It->second.Event) {
-            SetEvent(It->second.Event);
-        }
-        Logger::Log("{CYN}IoManager::SignalCompletion IRP=0x%llx Status=0x%08x Info=0x%llx{RESET}\n",
-            IrpUcAddr, Status, (uint64_t)Information);
+    if (It == CompletionMap.end())
+        return;
+    if (It->second.Completed) {
+        Logger::Log("{RED}IoManager::SignalCompletion duplicate IRP=0x%llx ignored{RESET}\n", IrpUcAddr);
+        return;
     }
+    It->second.Status = Status;
+    It->second.Information = Information;
+    It->second.Completed = true;
+    if (It->second.Event)
+        SetEvent(It->second.Event);
+    Logger::Log("{CYN}IoManager::SignalCompletion IRP=0x%llx Status=0x%08x Info=0x%llx{RESET}\n",
+        IrpUcAddr, Status, (uint64_t)Information);
 }
 
 uint64_t IoManager::AllocateIrp(uc_engine* Uc, CCHAR StackSize) {
-    uint64_t TotalSize = sizeof(_IRP) + (uint64_t)StackSize * sizeof(_IO_STACK_LOCATION);
+    if (!Uc || StackSize <= 0) {
+        Logger::Log("{RED}IoManager::AllocateIrp invalid engine/StackSize=%d{RESET}\n", StackSize);
+        return 0;
+    }
+
+    uint64_t TotalSize = sizeof(_IRP) + (uint64_t)(UCHAR)StackSize * sizeof(_IO_STACK_LOCATION);
     uint64_t IrpUcAddr = UnicornMem::AllocateVariable(Uc, TotalSize, "IRP");
     if (!IrpUcAddr) {
         Logger::Log("{RED}IoManager::AllocateIrp failed to allocate %llu bytes{RESET}\n", TotalSize);
@@ -51,29 +61,32 @@ uint64_t IoManager::AllocateIrp(uc_engine* Uc, CCHAR StackSize) {
     auto IrpHost = (_IRP*)UnicornMem::UcToHost(IrpUcAddr);
     if (!IrpHost) {
         Logger::Log("{RED}IoManager::AllocateIrp UcToHost failed for 0x%llx{RESET}\n", IrpUcAddr);
+        UnicornMem::FreePool(Uc, IrpUcAddr);
         return 0;
     }
 
     memset(IrpHost, 0, (size_t)TotalSize);
-
     IrpHost->Type = 6;
     IrpHost->Size = (USHORT)sizeof(_IRP);
     IrpHost->StackCount = StackSize;
     IrpHost->CurrentLocation = StackSize + 1;
-
-    uint64_t PastEndSlotUcAddr = IrpUcAddr + sizeof(_IRP) + (uint64_t)StackSize * sizeof(_IO_STACK_LOCATION);
+    uint64_t PastEndSlotUcAddr =
+        IrpUcAddr + sizeof(_IRP) + (uint64_t)(UCHAR)StackSize * sizeof(_IO_STACK_LOCATION);
     IrpHost->Tail.Overlay.CurrentStackLocation = (_IO_STACK_LOCATION*)PastEndSlotUcAddr;
+
+    if (!RegisterIrp(Uc, IrpUcAddr, StackSize)) {
+        UnicornMem::FreePool(Uc, IrpUcAddr);
+        return 0;
+    }
 
     Logger::Log("{GRN}IoManager::AllocateIrp UC=0x%llx StackSize=%d TotalBytes=%llu{RESET}\n",
         IrpUcAddr, StackSize, TotalSize);
-
     return IrpUcAddr;
 }
 
 void IoManager::FreeIrp(uint64_t IrpUcAddr) {
-    if (IrpUcAddr) {
-        Logger::Log("{GRY}IoManager::FreeIrp 0x%llx{RESET}\n", IrpUcAddr);
-    }
+    if (IrpUcAddr)
+        ReleaseIrp(IrpUcAddr);
 }
 
 uint64_t IoManager::AllocateFileObject(uc_engine* Uc, uint64_t DeviceObjUcAddr) {
@@ -248,6 +261,7 @@ static IoManager::DispatchResult DispatchSimpleIrpSeh(uint64_t DeviceObjUcAddr, 
         }
     }
 
+    WaitForSingleObject(DispatchThread->HostThread, 5000);
     CompletionMapRemove(IrpUcAddr);
     CloseHandle(CompletionEvent);
     IoManager::FreeIrp(IrpUcAddr);

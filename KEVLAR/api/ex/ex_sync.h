@@ -4,6 +4,7 @@
 void h_ExAcquireFastMutex(PFAST_MUTEX FastMutex);
 void h_ExReleaseFastMutex(PFAST_MUTEX FastMutex);
 _SLIST_ENTRY* h_ExpInterlockedPopEntrySList(PSLIST_HEADER SListHead);
+USHORT h_ExQueryDepthSList(PSLIST_HEADER SListHead);
 BOOLEAN h_ExAcquireResourceExclusiveLite(_ERESOURCE* Resource, BOOLEAN Wait);
 BOOLEAN h_ExAcquireResourceSharedLite(_ERESOURCE* Resource, BOOLEAN Wait);
 void h_ExReleaseResourceLite(_ERESOURCE* Resource);

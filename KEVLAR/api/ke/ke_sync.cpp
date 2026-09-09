@@ -32,6 +32,32 @@ void h_KeReleaseSpinLockFromDpcLevel(PKSPIN_LOCK SpinLock) {
     _InterlockedExchange64((volatile LONG64*)HostLock, 0);
 }
 
+void h_KeAcquireInStackQueuedSpinLockAtDpcLevel(PKSPIN_LOCK SpinLock, PVOID LockHandle) {
+    auto HostLock = UcPtr(SpinLock);
+    auto HostHandle = UcPtr((uint8_t*)LockHandle);
+    if (!HostLock || !HostHandle)
+        return;
+
+    while (_InterlockedCompareExchange64((volatile LONG64*)HostLock, 1, 0) != 0)
+        _mm_pause();
+
+    // KLOCK_QUEUE_HANDLE begins with KSPIN_LOCK_QUEUE { Next, Lock }.
+    memset(HostHandle, 0, 0x18);
+    *reinterpret_cast<uint64_t*>(HostHandle + 8) = reinterpret_cast<uint64_t>(SpinLock);
+}
+
+void h_KeReleaseInStackQueuedSpinLockFromDpcLevel(PVOID LockHandle) {
+    auto HostHandle = UcPtr((uint8_t*)LockHandle);
+    if (!HostHandle)
+        return;
+    auto SpinLock = reinterpret_cast<PKSPIN_LOCK>(
+        *reinterpret_cast<uint64_t*>(HostHandle + 8));
+    auto HostLock = UcPtr(SpinLock);
+    if (HostLock)
+        _InterlockedExchange64((volatile LONG64*)HostLock, 0);
+    memset(HostHandle, 0, 0x18);
+}
+
 void h_KeInitializeMutex(PVOID Mutex, ULONG Level) {
     Logger::Log("{MAG}\tKeInitializeMutex: mutex=%p level=%u{RESET}\n", Mutex, Level);
 

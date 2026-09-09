@@ -1,5 +1,39 @@
 #pragma once
 #include "include/common.h"
+#include <vector>
+
+namespace ObCallbacks {
+
+constexpr uint32_t OperationHandleCreate = 0x1;
+constexpr uint32_t OperationHandleDuplicate = 0x2;
+
+struct OperationEvent {
+    uint64_t Object = 0;
+    uint64_t ObjectType = 0;
+    uint64_t SourceProcess = 0;
+    uint64_t TargetProcess = 0;
+    uint32_t Operation = OperationHandleCreate;
+    uint32_t Flags = 0;
+    ACCESS_MASK DesiredAccess = 0;
+    ACCESS_MASK OriginalDesiredAccess = 0;
+    ACCESS_MASK GrantedAccess = 0;
+    NTSTATUS ReturnStatus = STATUS_SUCCESS;
+};
+
+struct CallbackFrame {
+    uint64_t RegistrationHandle = 0;
+    uint64_t PostOperation = 0;
+    uint64_t RegistrationContext = 0;
+    uint64_t CallContext = 0;
+};
+
+NTSTATUS TriggerPre(uc_engine* Engine, OperationEvent& Event,
+    std::vector<CallbackFrame>& Frames);
+NTSTATUS TriggerPost(uc_engine* Engine, const OperationEvent& Event,
+    std::vector<CallbackFrame>& Frames);
+size_t RegisteredCount();
+
+}
 
 uint64_t h_ObfDereferenceObject(PVOID obj);
 LONG_PTR h_ObfReferenceObject(PVOID Object);

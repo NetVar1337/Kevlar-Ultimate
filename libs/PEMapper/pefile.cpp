@@ -350,6 +350,10 @@ uint64_t PEFile::GetImageBase() { return imagebase; }
 
 uint64_t PEFile::GetMappedImageBase() { return (uint64_t)mapped_buffer; }
 bool PEFile::IsMapped() const { return mapped_buffer != nullptr; }
+uint16_t PEFile::GetSubsystem() const { return pOptionalHeader ? pOptionalHeader->Subsystem : 0; }
+uint16_t PEFile::GetCharacteristics() const { return pImageFileHeader ? pImageFileHeader->Characteristics : 0; }
+bool PEFile::IsDll() const { return (GetCharacteristics() & IMAGE_FILE_DLL) != 0; }
+
 
 
 uint64_t PEFile::GetVirtualSize() { return virtual_size; }

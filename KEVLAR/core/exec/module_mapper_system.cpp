@@ -194,19 +194,26 @@ uint64_t UnicornEmu::MapKuserSharedData() {
         memcpy(KusdBlock, (void*)0x7FFE0000, 0x1000);
 
         auto Kusd = (uint8_t*)KusdBlock;
+        const auto& Profile = Kevlar::Profile::Active();
+        const auto& K = Profile.KuserSharedData;
 
-        Logger::Log("{BLU}KUSD: Build=%u Product=%u Major=%u ProcArch=%u{RESET}\n",
-            *(uint32_t*)(Kusd + 0x260), *(uint32_t*)(Kusd + 0x264),
-            *(uint32_t*)(Kusd + 0x26C), *(uint16_t*)(Kusd + 0x26A));
+        *(uint32_t*)(Kusd + K.NtBuildNumber) = Profile.BuildNumber;
+        *(uint32_t*)(Kusd + K.NtMajorVersion) = 10;
+        *(uint16_t*)(Kusd + K.ProcessorArchitecture) = 9; // PROCESSOR_ARCHITECTURE_AMD64
 
-        DWORD ProcCount = CpuProfile::kLogicalProcessorCount;
+        Logger::Log("{BLU}KUSD profile=%s Build=%u Product=%u Major=%u ProcArch=%u{RESET}\n",
+            Profile.Name.c_str(), *(uint32_t*)(Kusd + K.NtBuildNumber),
+            *(uint32_t*)(Kusd + K.NtProductType), *(uint32_t*)(Kusd + K.NtMajorVersion),
+            *(uint16_t*)(Kusd + K.ProcessorArchitecture));
 
-        *(uint32_t*)(Kusd + 0x2C0) = ProcCount;
-        *(uint8_t*)(Kusd + 0x2C4) = 1;
-        *(uint32_t*)(Kusd + 0x3C0) = ProcCount;
+        DWORD ProcCount = Profile.Cpu.LogicalProcessorCount;
+
+        *(uint32_t*)(Kusd + K.ActiveProcessorCount) = ProcCount;
+        *(uint8_t*)(Kusd + K.ActiveGroupCount) = 1;
+        *(uint32_t*)(Kusd + K.ActiveProcessorCountDeprecated) = ProcCount;
 
         uint32_t PhysPages = 2097152;
-        *(uint32_t*)(Kusd + 0x2E8) = PhysPages;
+        *(uint32_t*)(Kusd + K.PhysicalPageCount) = PhysPages;
 
         *(uint8_t*)(Kusd + 0x2D4) = 0;
 
@@ -214,14 +221,11 @@ uint64_t UnicornEmu::MapKuserSharedData() {
         *(uint32_t*)(Kusd + 0x2F0) &= ~(1u << 2);
         *(uint8_t*)(Kusd + 0x2ED) = 0;
 
-        *(uint32_t*)(Kusd + 0x244) = 0x200000;
-
-        uint32_t Cookie = *(uint32_t*)(Kusd + 0x330);
+        uint32_t Cookie = *(uint32_t*)(Kusd + K.Cookie);
         if (Cookie == 0) {
-            LARGE_INTEGER PerfCount;
-            QueryPerformanceCounter(&PerfCount);
-            Cookie = (uint32_t)(PerfCount.QuadPart ^ GetCurrentProcessId() ^ 0xBB40E64D);
-            *(uint32_t*)(Kusd + 0x330) = Cookie;
+            Cookie = static_cast<uint32_t>(Kevlar::Profile::Fingerprint(Profile));
+            if (Cookie == 0) Cookie = 0xBB40E64D;
+            *(uint32_t*)(Kusd + K.Cookie) = Cookie;
         }
 
         *(uint8_t*)(Kusd + 0x2EC) = 0;
@@ -364,30 +368,32 @@ void UnicornEmu::PatchSystemModuleExports() {
                 if (!VarHost || ExportRva + CopySize > Mod.Size)
                     continue;
 
-                uint64_t Value = 0;
-                memcpy(&Value, VarHost, CopySize);
+                std::vector<uint8_t> Value(CopySize);
+                memcpy(Value.data(), VarHost, CopySize);
+                uint64_t Preview = 0;
+                memcpy(&Preview, Value.data(), (std::min)(CopySize, sizeof(Preview)));
 
                 bool Writable = IsRvaInWritableSection(HostBase, ExportRva);
 
                 if (Writable) {
-                    memcpy(HostBase + ExportRva, &Value, CopySize);
+                    memcpy(HostBase + ExportRva, Value.data(), CopySize);
                     Provider::data_providers[ExportName] = (PVOID)(Mod.UcBase + ExportRva);
                     PatchedInPlace++;
 
                     Logger::Log("{CYN}  Patched %s at RVA 0x%x (%zu bytes, value=0x%llx){RESET}\n",
-                        ExportName.c_str(), ExportRva, CopySize, Value);
+                        ExportName.c_str(), ExportRva, CopySize, Preview);
                 } else {
                     uint64_t UcAddr = UnicornMem::AllocateVariable(
                         PrimaryEngine, CopySize < 0x10 ? 0x10 : CopySize, ExportName.c_str());
                     if (UcAddr) {
                         void* UcHost = UnicornMem::UcToHost(UcAddr);
                         if (UcHost)
-                            memcpy(UcHost, &Value, CopySize);
+                            memcpy(UcHost, Value.data(), CopySize);
                         Provider::data_providers[ExportName] = (PVOID)UcAddr;
                         RedirectedToUc++;
 
                         Logger::Log("{YEL}  Redirected %s (RVA 0x%x, read-only section) to UC 0x%llx (%zu bytes, value=0x%llx){RESET}\n",
-                            ExportName.c_str(), ExportRva, UcAddr, CopySize, Value);
+                            ExportName.c_str(), ExportRva, UcAddr, CopySize, Preview);
                     }
                 }
             }

@@ -165,6 +165,35 @@ int h__vsnwprintf(wchar_t* buffer, size_t count, const wchar_t* format, va_list 
     }
 }
 
+int h__vsnwprintf_s(wchar_t* Buffer, size_t SizeOfBuffer, size_t Count, const wchar_t* Format, va_list ArgPtr) {
+    auto HostBuf = UcPtr(Buffer);
+    auto HostFmt = UcPtr((wchar_t*)Format);
+    auto HostArgBase = (uint64_t*)UnicornMem::UcToHost((uint64_t)ArgPtr);
+    if (!HostBuf || !HostFmt || !HostArgBase || SizeOfBuffer == 0)
+        return -1;
+
+    int FmtArgCount = CountFmtArgs(HostFmt);
+    uint64_t ConvertedArgs[16] = {};
+    for (int I = 0; I < FmtArgCount && I < 16; ++I)
+        ConvertedArgs[I] = HostArgBase[I];
+    ConvertStringArgs(HostFmt, ConvertedArgs, FmtArgCount);
+
+    __try {
+        return _vsnwprintf_s(HostBuf, SizeOfBuffer, Count, HostFmt, (va_list)ConvertedArgs);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        HostBuf[0] = 0;
+        return -1;
+    }
+}
+
+errno_t h_strncpy_s(char* Dest, rsize_t DestSize, const char* Src, rsize_t Count) {
+    auto HostDest = UcPtr(Dest);
+    auto HostSrc = UcPtr((char*)Src);
+    if (!HostDest || !HostSrc || DestSize == 0)
+        return EINVAL;
+    return strncpy_s(HostDest, DestSize, HostSrc, Count);
+}
+
 int h__wcsnicmp(const wchar_t* Str1, const wchar_t* Str2, uint64_t Count) {
     auto Host1 = UcPtr((wchar_t*)Str1);
     auto Host2 = UcPtr((wchar_t*)Str2);

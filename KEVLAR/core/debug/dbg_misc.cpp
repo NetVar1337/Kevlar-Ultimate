@@ -44,3 +44,10 @@ NTSTATUS h_KdSystemDebugControl(int Command, PVOID InputBuffer, ULONG InputBuffe
     }
     return 0;
 }
+
+NTSTATUS h_ZwSystemDebugControl(int Command, PVOID InputBuffer, ULONG InputBufferLength,
+    PVOID OutputBuffer, ULONG OutputBufferLength, PULONG ReturnLength) {
+    return h_KdSystemDebugControl(
+        Command, InputBuffer, InputBufferLength,
+        OutputBuffer, OutputBufferLength, ReturnLength, 0);
+}

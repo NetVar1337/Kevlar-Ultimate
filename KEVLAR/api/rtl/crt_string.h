@@ -9,6 +9,8 @@ int h_swprintf_s(wchar_t* buffer, size_t sizeOfBuffer, const wchar_t* format, ..
 errno_t h_wcscpy_s(wchar_t* dest, rsize_t dest_size, const wchar_t* src);
 errno_t h_wcscat_s(wchar_t* strDestination, size_t numberOfElements, const wchar_t* strSource);
 int h__vsnwprintf(wchar_t* buffer, size_t count, const wchar_t* format, va_list argptr);
+int h__vsnwprintf_s(wchar_t* buffer, size_t sizeOfBuffer, size_t count, const wchar_t* format, va_list argptr);
+errno_t h_strncpy_s(char* dest, rsize_t destSize, const char* src, rsize_t count);
 int h__wcsnicmp(const wchar_t* Str1, const wchar_t* Str2, uint64_t Count);
 int h__wcsicmp(const wchar_t* Str1, const wchar_t* Str2);
 int h__stricmp(const char* Str1, const char* Str2);

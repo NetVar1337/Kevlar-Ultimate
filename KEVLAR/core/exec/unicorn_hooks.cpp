@@ -5,6 +5,7 @@
 #include <PEMapper/pefile.h>
 #include "host/providers/provider.h"
 #include "host/providers/ntoskrnl_provider.h"
+#include "host/providers/export_contract_runtime.h"
 #include "core/memory/unicorn_memory.h"
 #include "core/exception/seh_dispatch.h"
 #include <SymParser/symparser.hpp>
@@ -391,8 +392,33 @@ void UnicornEmu::Hooks::OnSentinelExec(uc_engine* Uc, uint64_t Addr, uint32_t Si
     for (int I = 0; I < 12; I++) {
         UcReadU64(Uc, Rsp + 0x28 + I * 8, StackArgs[I]);
     }
+    auto& Contracts = Kevlar::Host::Contracts::ActiveRegistry();
+    auto Contract = Contracts.Find(EntryCopy.Module, EntryCopy.Name);
+    if (Contract) {
+        Kevlar::Host::Contracts::CallContext Context;
+        Context.Arguments = { Rcx, Rdx, R8, R9 };
+        Context.Arguments.insert(Context.Arguments.end(), std::begin(StackArgs), std::end(StackArgs));
+        Context.Arguments.resize(Contract->ArgumentCount);
+        Context.CurrentIrql = 0;
+        Context.VirtualTimeTicks = UnicornEmu::VirtualTsc;
+        auto Validation = Contracts.ValidateCall(EntryCopy.Module, EntryCopy.Name, Context);
+        if (Validation.Disposition != Kevlar::Host::Contracts::CallDisposition::InvokeProvider) {
+            Logger::Log("{YEL}Contract validation warning for %s!%s (%zu diagnostic(s)); invoking typed provider{RESET}\n",
+                EntryCopy.Module.c_str(), EntryCopy.Name.c_str(),
+                Validation.Diagnostics.size());
+            for (const auto& Diagnostic : Validation.Diagnostics) {
+                Logger::Log("{YEL}  contract %s: %s{RESET}\n",
+                    std::string(Kevlar::Host::Contracts::ToString(Diagnostic.Code)).c_str(),
+                    Diagnostic.Message.c_str());
+            }
+        }
+    }
     auto CallResult = CallHookSafe(EntryCopy.HostFunc, Rcx, Rdx, R8, R9, StackArgs);
     uint64_t RetVal = CallResult.RetVal;
+    if (Contract) {
+        Contracts.RecordResult(
+            EntryCopy.Module, EntryCopy.Name, RetVal, UnicornEmu::VirtualTsc);
+    }
     if ((RetVal & 0xFFFFFFFF) == 0xC0000034) {
         Logger::Log("{RED}[TRACE-0x34] %s returned STATUS_OBJECT_NAME_NOT_FOUND! caller=drv+0x%llx RCX=%llx RDX=%llx R8=%llx R9=%llx{RESET}\n",
             EntryCopy.Name.c_str(), RetRip - DRIVER_BASE_UC, Rcx, Rdx, R8, R9);

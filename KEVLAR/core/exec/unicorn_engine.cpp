@@ -28,6 +28,7 @@ uint64_t UnicornEmu::EacProbeBufferStart = 0;
 uint64_t UnicornEmu::EacProbeBufferEnd = 0;
 bool UnicornEmu::ProbeEnginesOnly = false;
 bool UnicornEmu::WorkersDeepMode = false;
+bool UnicornEmu::HyperVideoInjectionEnabled = false;
 
 static std::mutex InstrCountLock;
 static std::unordered_map<uc_engine*, uint64_t*> InstrCountMap;

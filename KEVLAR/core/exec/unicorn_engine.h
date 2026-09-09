@@ -38,6 +38,7 @@
 class PEFile;
 
 struct StubEntry {
+    std::string Module;
     std::string Name;
     PVOID HostFunc;
     uint64_t SentinelAddr;
@@ -111,7 +112,7 @@ void SetupIdt(uc_engine* Uc);
 void SetupSegmentRegisters(uc_engine* Uc);
 void SetupControlRegisters(uc_engine* Uc);
 void SetupMsrs(uc_engine* Uc);
-uint64_t AllocateSentinel(const char* FuncName, PVOID HostFunc, bool IsPassthrough = false);
+uint64_t AllocateSentinel(const char* FuncName, PVOID HostFunc, bool IsPassthrough = false, const char* ModuleName = "ntoskrnl.exe");
 void BuildSentinelIat(PEFile* Module);
 uint64_t MapRegion(uc_engine* Uc, uint64_t UcAddr, uint64_t Size, uint32_t Perms, const char* Name);
 uint64_t MapRegionPtr(uc_engine* Uc, uint64_t UcAddr, uint64_t Size, uint32_t Perms, void* HostPtr, const char* Name);
@@ -122,7 +123,7 @@ uint64_t MapKernelStructs();
 uint64_t MapKuserSharedData();
 uint64_t MapDataExports();
 void PatchSystemModuleExports();
-bool StartEmulation(uc_engine* Uc, uint64_t EntryPoint);
+bool StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMainMode = false);
 void StopEmulation(uc_engine* Uc);
 std::string DisassembleAt(uc_engine* Uc, uint64_t Addr);
 
@@ -191,6 +192,7 @@ extern uint64_t DispatchProbeB;
     extern uint64_t EacProbeBufferEnd;
 extern bool ProbeEnginesOnly;
     extern bool WorkersDeepMode;
+extern bool HyperVideoInjectionEnabled;
     uint64_t GetInstrCount(uc_engine* Uc);
 extern bool StrictExportsEnabled;
 extern bool ProvenanceEnabled;

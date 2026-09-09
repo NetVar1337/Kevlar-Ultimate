@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "global": {
+    "strict_exports": true,
+    "forbid_log_patterns": [
+      "KEVLAR HOST CRASH",
+      "HOOK CRASH",
+      "SysMod UNHANDLED",
+      "Invalid memory read",
+      "Invalid memory write",
+      "double completion"
+    ],
+    "deterministic_runs": 3,
+    "require_nonempty_kernel_lifecycle": true
+  },
+  "targets": [
+    {
+      "id": "alea-dummy-dll",
+      "path": "C:\\Program Files\\Alea\\Alea.sys",
+      "sha256": "f5ac8af14ea25f22f29de9d10c2d96f4deb8ceb82aac56105bb74cb445fe10df",
+      "execution_mode": "user_dll",
+      "max_instructions": 250000,
+      "required_log_patterns": [
+        "PE mode: user-mode DLL",
+        "MessageBoxA:",
+        "DllMain returned: 0x1",
+        "DllMain completed successfully"
+      ]
+    },
+    {
+      "id": "faceit-ac-2026-09-08",
+      "path": "C:\\Program Files\\FACEIT AC\\FACEIT_AC.sys",
+      "sha256": "98d1a32145b3a955f91fa9a0057e19dff0c7c539d70f121f91da6f8f28113bfd",
+      "execution_mode": "kernel_driver",
+      "max_instructions": 250000000,
+      "required_log_patterns": [
+        "Starting DriverEntry at RVA 0x10b000",
+        "MmGetSystemRoutineAddress: InitSafeBootMode",
+        "DriverEntry returned: 0x0",
+        "[LIFECYCLE]",
+        "SystemKernelDebuggerInformation",
+        "SystemModuleInformation"
+      ],
+      "completion_patterns": [
+        "DriverEntry completed successfully"
+      ]
+    }
+  ]
+}

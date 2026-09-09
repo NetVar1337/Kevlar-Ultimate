@@ -1,25 +1,162 @@
 #include "flt_filter.h"
 #include "core/registry/virtual_fs.h"
+#include "api/ob/cm_callback.h"
+#include <algorithm>
 #include <atomic>
+#include <mutex>
+#include <vector>
+
+namespace {
+
+struct GuestFltRegistration {
+    uint16_t Size;
+    uint16_t Version;
+    uint32_t Flags;
+    uint64_t ContextRegistration;
+    uint64_t OperationRegistration;
+};
+
+struct GuestFltOperationRegistration {
+    uint8_t MajorFunction;
+    uint8_t Reserved[3];
+    uint32_t Flags;
+    uint64_t PreOperation;
+    uint64_t PostOperation;
+    uint64_t Reserved1;
+};
+
+struct FltOperationRegistration {
+    uint8_t MajorFunction;
+    uint32_t Flags;
+    uint64_t PreOperation;
+    uint64_t PostOperation;
+};
+
+struct FltRegistration {
+    uint64_t Driver;
+    uint64_t Registration;
+    uint64_t Handle;
+    uint64_t Sequence;
+    uc_engine* Engine;
+    bool Started;
+    std::vector<FltOperationRegistration> Operations;
+};
+
+std::mutex g_FltCallbackLock;
+std::vector<FltRegistration> g_FltCallbacks;
+uint64_t g_FltSequence = 1;
+constexpr size_t kFltFilterLimit = 64;
+constexpr size_t kFltOperationLimit = 128;
+constexpr uint8_t kFltOperationEnd = 0x80;
+constexpr uint64_t kFltHandleMagic = 0x454C444E41485446ULL; // "FTHANDLE"
+
+}
 
 NTSTATUS h_FltRegisterFilter(PVOID Driver, PVOID Registration, PVOID* RetFilter) {
-    Logger::Log("{GRN}FltRegisterFilter called{RESET}\n");
-    uint64_t FakeFilter = UnicornMem::AllocateVariable(UnicornThread::GetCurrentEngine(), 0x200, "FakeFilter");
-    if (RetFilter) {
-        auto HostRetFilter = UcPtr(RetFilter);
-        *HostRetFilter = (PVOID)FakeFilter;
+    uc_engine* Engine = CallbackRuntime::SelectEngine(nullptr);
+    if (!Engine || !Driver || !Registration || !RetFilter)
+        return STATUS_INVALID_PARAMETER;
+
+    GuestFltRegistration GuestRegistration = {};
+    if (!CallbackRuntime::ReadGuest(
+            Engine, (uint64_t)Registration, &GuestRegistration, sizeof(GuestRegistration)) ||
+        GuestRegistration.Size < sizeof(GuestFltRegistration) ||
+        GuestRegistration.Size > 0x100 ||
+        GuestRegistration.Version < 0x0200 ||
+        GuestRegistration.Version > 0x0203 ||
+        !GuestRegistration.OperationRegistration)
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<FltOperationRegistration> Operations;
+    bool FoundTerminator = false;
+    for (size_t Index = 0; Index < kFltOperationLimit; ++Index) {
+        GuestFltOperationRegistration GuestOperation = {};
+        const uint64_t Address = GuestRegistration.OperationRegistration +
+            Index * sizeof(GuestOperation);
+        if (!CallbackRuntime::ReadGuest(
+                Engine, Address, &GuestOperation, sizeof(GuestOperation)))
+            return STATUS_INVALID_PARAMETER;
+        if (GuestOperation.MajorFunction == kFltOperationEnd) {
+            FoundTerminator = true;
+            break;
+        }
+        if ((GuestOperation.Flags & ~0x7UL) || !GuestOperation.PreOperation)
+            return STATUS_INVALID_PARAMETER;
+        if (std::find_if(Operations.begin(), Operations.end(),
+                [&GuestOperation](const FltOperationRegistration& Existing) {
+                    return Existing.MajorFunction == GuestOperation.MajorFunction;
+                }) != Operations.end())
+            return STATUS_FLT_DUPLICATE_ENTRY;
+        Operations.push_back({
+            GuestOperation.MajorFunction,
+            GuestOperation.Flags,
+            GuestOperation.PreOperation,
+            GuestOperation.PostOperation
+        });
     }
-    return 0;
+    if (!FoundTerminator)
+        return STATUS_INVALID_PARAMETER;
+
+    std::lock_guard<std::mutex> Guard(g_FltCallbackLock);
+    if (g_FltCallbacks.size() >= kFltFilterLimit)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    for (const auto& Existing : g_FltCallbacks) {
+        if (Existing.Driver == (uint64_t)Driver ||
+            Existing.Registration == (uint64_t)Registration)
+            return STATUS_FLT_REGISTRATION_BUSY;
+    }
+
+    const uint64_t Sequence = g_FltSequence++;
+    const uint64_t Handle = CallbackRuntime::AllocateOpaqueHandle(
+        Engine, kFltHandleMagic, Sequence, "FltFilterHandle");
+    if (!Handle)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    if (!CallbackRuntime::WriteGuest(Engine, (uint64_t)RetFilter, &Handle, sizeof(Handle))) {
+        CallbackRuntime::FreeGuest(Engine, Handle);
+        return STATUS_INVALID_PARAMETER;
+    }
+    g_FltCallbacks.push_back({
+        (uint64_t)Driver,
+        (uint64_t)Registration,
+        Handle,
+        Sequence,
+        Engine,
+        false,
+        std::move(Operations)
+    });
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS h_FltStartFiltering(PVOID Filter) {
-    Logger::Log("{GRN}FltStartFiltering called{RESET}\n");
-    return 0;
+    std::lock_guard<std::mutex> Guard(g_FltCallbackLock);
+    auto It = std::find_if(g_FltCallbacks.begin(), g_FltCallbacks.end(),
+        [Filter](const FltRegistration& Entry) {
+            return Entry.Handle == (uint64_t)Filter;
+        });
+    if (It == g_FltCallbacks.end())
+        return STATUS_FLT_FILTER_NOT_FOUND;
+    if (It->Started)
+        return STATUS_FLT_REGISTRATION_BUSY;
+    It->Started = true;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS h_FltUnregisterFilter(PVOID Filter) {
-    Logger::Log("{CYN}FltUnregisterFilter called{RESET}\n");
-    return 0;
+    uc_engine* Engine = nullptr;
+    const uint64_t Handle = (uint64_t)Filter;
+    {
+        std::lock_guard<std::mutex> Guard(g_FltCallbackLock);
+        auto It = std::find_if(g_FltCallbacks.begin(), g_FltCallbacks.end(),
+            [Handle](const FltRegistration& Entry) {
+                return Entry.Handle == Handle;
+            });
+        if (It == g_FltCallbacks.end())
+            return STATUS_FLT_FILTER_NOT_FOUND;
+        Engine = It->Engine;
+        g_FltCallbacks.erase(It);
+    }
+    CallbackRuntime::FreeGuest(Engine, Handle);
+    return STATUS_SUCCESS;
 }
 
 void h_FltObjectDereference(PVOID Object) {
@@ -175,4 +312,153 @@ NTSTATUS h_FltGetVolumeProperties(PVOID Volume, PVOID VolumeProperties, ULONG Le
         *HostPtr = 0;
     }
     return 0xC000000D;
+}
+
+void FltCallbacks::ReleaseFrame(OperationFrame& Frame) {
+    if (Frame.Engine) {
+        CallbackRuntime::FreeGuest(Frame.Engine, Frame.CallbackData);
+        CallbackRuntime::FreeGuest(Frame.Engine, Frame.RelatedObjects);
+    }
+    Frame = {};
+}
+
+NTSTATUS FltCallbacks::TriggerPre(uc_engine* Engine, OperationEvent& Event,
+    OperationFrame& Frame, uint32_t* PreOperationStatus) {
+    ReleaseFrame(Frame);
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    if (!Engine || !Event.CallbackData || !Event.CallbackDataSize ||
+        !Event.RelatedObjects || !Event.RelatedObjectsSize)
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<FltRegistration> Filters;
+    {
+        std::lock_guard<std::mutex> Guard(g_FltCallbackLock);
+        for (const auto& Filter : g_FltCallbacks) {
+            if (Filter.Started)
+                Filters.push_back(Filter);
+        }
+    }
+    std::stable_sort(Filters.begin(), Filters.end(),
+        [](const FltRegistration& Left, const FltRegistration& Right) {
+            return Left.Sequence < Right.Sequence;
+        });
+
+    Frame.Engine = Engine;
+    Frame.CallbackData = CallbackRuntime::AllocateGuestCopy(
+        Engine, Event.CallbackData, Event.CallbackDataSize, "FltCallbackData");
+    Frame.RelatedObjects = CallbackRuntime::AllocateGuestCopy(
+        Engine, Event.RelatedObjects, Event.RelatedObjectsSize, "FltRelatedObjects");
+    if (!Frame.CallbackData || !Frame.RelatedObjects) {
+        ReleaseFrame(Frame);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    uint32_t LastPreStatus = 1; // FLT_PREOP_SUCCESS_NO_CALLBACK
+    NTSTATUS Result = STATUS_SUCCESS;
+    bool StopDispatch = false;
+    for (const auto& Filter : Filters) {
+        for (const auto& Operation : Filter.Operations) {
+            if (Operation.MajorFunction != Event.MajorFunction)
+                continue;
+
+            uint64_t CompletionContext = 0;
+            const uint64_t CompletionContextAddress = CallbackRuntime::AllocateGuestCopy(
+                Engine, &CompletionContext, sizeof(CompletionContext), "FltCompletionContext");
+            if (!CompletionContextAddress) {
+                Result = STATUS_INSUFFICIENT_RESOURCES;
+                StopDispatch = true;
+                break;
+            }
+
+            const uint64_t Arguments[] = {
+                Frame.CallbackData,
+                Frame.RelatedObjects,
+                CompletionContextAddress
+            };
+            uint64_t CallbackResult = 0;
+            if (!CallbackRuntime::InvokeGuest(
+                    Engine, Operation.PreOperation, Arguments, 3, &CallbackResult) ||
+                !CallbackRuntime::ReadGuest(
+                    Engine, CompletionContextAddress,
+                    &CompletionContext, sizeof(CompletionContext))) {
+                Result = (NTSTATUS)0xC0000001L;
+                CallbackRuntime::FreeGuest(Engine, CompletionContextAddress);
+                StopDispatch = true;
+                break;
+            }
+            CallbackRuntime::FreeGuest(Engine, CompletionContextAddress);
+
+            LastPreStatus = (uint32_t)CallbackResult;
+            if ((LastPreStatus == 0 || LastPreStatus == 5) && Operation.PostOperation) {
+                Frame.PostCallbacks.push_back({
+                    Operation.PostOperation,
+                    CompletionContext
+                });
+            }
+            if (LastPreStatus > 6) {
+                Result = STATUS_INVALID_PARAMETER;
+                StopDispatch = true;
+                break;
+            }
+            if (LastPreStatus == 2 || LastPreStatus == 3 ||
+                LastPreStatus == 4 || LastPreStatus == 6) {
+                StopDispatch = true;
+                break;
+            }
+        }
+        if (StopDispatch)
+            break;
+    }
+
+    if (!CallbackRuntime::ReadGuest(
+            Engine, Frame.CallbackData, Event.CallbackData, Event.CallbackDataSize) ||
+        !CallbackRuntime::ReadGuest(
+            Engine, Frame.RelatedObjects, Event.RelatedObjects, Event.RelatedObjectsSize))
+        Result = STATUS_INVALID_PARAMETER;
+    if (PreOperationStatus)
+        *PreOperationStatus = LastPreStatus;
+    if (Frame.PostCallbacks.empty())
+        ReleaseFrame(Frame);
+    return Result;
+}
+
+NTSTATUS FltCallbacks::TriggerPost(OperationEvent& Event, OperationFrame& Frame) {
+    if (!Frame.Engine || !Frame.CallbackData || !Frame.RelatedObjects ||
+        !Event.CallbackData || !Event.CallbackDataSize ||
+        !Event.RelatedObjects || !Event.RelatedObjectsSize)
+        return STATUS_INVALID_PARAMETER;
+
+    NTSTATUS Result = STATUS_SUCCESS;
+    if (!CallbackRuntime::WriteGuest(
+            Frame.Engine, Frame.CallbackData, Event.CallbackData, Event.CallbackDataSize) ||
+        !CallbackRuntime::WriteGuest(
+            Frame.Engine, Frame.RelatedObjects, Event.RelatedObjects, Event.RelatedObjectsSize))
+        Result = STATUS_INVALID_PARAMETER;
+
+    if (Result >= 0) {
+        for (auto It = Frame.PostCallbacks.rbegin(); It != Frame.PostCallbacks.rend(); ++It) {
+            const uint64_t Arguments[] = {
+                Frame.CallbackData,
+                Frame.RelatedObjects,
+                It->CompletionContext,
+                Event.PostOperationFlags
+            };
+            if (!CallbackRuntime::InvokeGuest(
+                    Frame.Engine, It->Function, Arguments, 4, nullptr))
+                Result = (NTSTATUS)0xC0000001L;
+        }
+    }
+
+    if (!CallbackRuntime::ReadGuest(
+            Frame.Engine, Frame.CallbackData, Event.CallbackData, Event.CallbackDataSize) ||
+        !CallbackRuntime::ReadGuest(
+            Frame.Engine, Frame.RelatedObjects, Event.RelatedObjects, Event.RelatedObjectsSize))
+        Result = STATUS_INVALID_PARAMETER;
+    ReleaseFrame(Frame);
+    return Result;
+}
+
+size_t FltCallbacks::RegisteredCount() {
+    std::lock_guard<std::mutex> Guard(g_FltCallbackLock);
+    return g_FltCallbacks.size();
 }

@@ -461,7 +461,7 @@ BOOLEAN h_KeAlertThread(void* Thread, uint8_t AlertMode) {
 }
 
 uint64_t h_KeQueryActiveProcessorCountEx(uint16_t GroupNumber) {
-    uint64_t Count = CpuProfile::kLogicalProcessorCount;
+    uint64_t Count = CpuProfile::LogicalProcessorCount();
     Logger::Log("{CYN}\tKeQueryActiveProcessorCountEx: group=%u returning %llu{RESET}\n", GroupNumber, Count);
     return Count;
 }

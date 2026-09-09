@@ -3,6 +3,109 @@
 #include "api/nt/nt_memory.h"
 #include "core/memory/unicorn_memory.h"
 #include "core/exec/unicorn_engine.h"
+#include "api/ob/cm_callback.h"
+#include <algorithm>
+#include <mutex>
+#include <vector>
+
+namespace {
+
+struct GuestObCallbackRegistration {
+    uint16_t Version;
+    uint16_t OperationRegistrationCount;
+    uint32_t Reserved;
+    UNICODE_STRING Altitude;
+    uint64_t RegistrationContext;
+    uint64_t OperationRegistration;
+};
+
+struct GuestObOperationRegistration {
+    uint64_t ObjectType;
+    uint32_t Operations;
+    uint32_t Reserved;
+    uint64_t PreOperation;
+    uint64_t PostOperation;
+};
+
+struct GuestObPreParameters {
+    uint32_t DesiredAccess;
+    uint32_t OriginalDesiredAccess;
+    uint64_t SourceProcess;
+    uint64_t TargetProcess;
+};
+
+struct GuestObPreInformation {
+    uint32_t Operation;
+    uint32_t Flags;
+    uint64_t Object;
+    uint64_t ObjectType;
+    uint64_t CallContext;
+    uint64_t Parameters;
+};
+
+struct GuestObPostParameters {
+    uint32_t GrantedAccess;
+    uint32_t Reserved;
+};
+
+struct GuestObPostInformation {
+    uint32_t Operation;
+    uint32_t Flags;
+    uint64_t Object;
+    uint64_t ObjectType;
+    uint64_t CallContext;
+    int32_t ReturnStatus;
+    uint32_t Reserved;
+    uint64_t Parameters;
+};
+
+struct ObOperationRegistration {
+    uint64_t ObjectType;
+    uint32_t Operations;
+    uint64_t PreOperation;
+    uint64_t PostOperation;
+};
+
+struct ObRegistration {
+    uint64_t Handle;
+    uint64_t Context;
+    uint64_t Sequence;
+    uc_engine* Engine;
+    std::wstring Altitude;
+    std::vector<ObOperationRegistration> Operations;
+};
+
+std::mutex g_ObCallbackLock;
+std::vector<ObRegistration> g_ObCallbacks;
+uint64_t g_ObSequence = 1;
+constexpr size_t kObRegistrationLimit = 64;
+constexpr size_t kObOperationLimit = 64;
+constexpr uint16_t kObRegistrationVersion = 0x100;
+constexpr uint64_t kObHandleMagic = 0x454C444E4148424FULL; // "OBHANDLE"
+
+bool IsObAltitudeValid(const std::wstring& Altitude) {
+    if (Altitude.empty() || Altitude.size() > 255)
+        return false;
+    bool Dot = false;
+    for (wchar_t Ch : Altitude) {
+        if (Ch >= L'0' && Ch <= L'9')
+            continue;
+        if (Ch == L'.' && !Dot) {
+            Dot = true;
+            continue;
+        }
+        return false;
+    }
+    return Altitude.front() != L'.' && Altitude.back() != L'.';
+}
+
+bool ObRegistrationPrecedes(const ObRegistration& Left, const ObRegistration& Right) {
+    if (Left.Altitude == Right.Altitude)
+        return Left.Sequence < Right.Sequence;
+    return CallbackRuntime::AltitudePrecedes(Left.Altitude, Right.Altitude);
+}
+
+}
 
 uint64_t h_ObfDereferenceObject(PVOID obj) { //TODO
 
@@ -61,18 +164,105 @@ NTSTATUS h_ObReferenceObjectByHandle(HANDLE handle, ACCESS_MASK DesiredAccess, _
     return 0;
 }
 
-//todo more logic required
 NTSTATUS h_ObRegisterCallbacks(PVOID CallbackRegistration, PVOID* RegistrationHandle) {
-    auto HostRegHandle = UcPtr(RegistrationHandle);
-    *HostRegHandle = (PVOID)0xDEADBEEFCAFE;
+    uc_engine* Engine = CallbackRuntime::SelectEngine(nullptr);
+    if (!Engine || !CallbackRegistration || !RegistrationHandle)
+        return STATUS_INVALID_PARAMETER;
+
+    GuestObCallbackRegistration Registration = {};
+    if (!CallbackRuntime::ReadGuest(
+            Engine, (uint64_t)CallbackRegistration, &Registration, sizeof(Registration)) ||
+        Registration.Version != kObRegistrationVersion ||
+        !Registration.OperationRegistration ||
+        Registration.OperationRegistrationCount == 0 ||
+        Registration.OperationRegistrationCount > kObOperationLimit)
+        return STATUS_INVALID_PARAMETER;
+
+    std::wstring Altitude;
+    const uint64_t AltitudeAddress =
+        (uint64_t)CallbackRegistration + offsetof(GuestObCallbackRegistration, Altitude);
+    if (!CallbackRuntime::ReadUnicodeString(Engine, AltitudeAddress, Altitude) ||
+        !IsObAltitudeValid(Altitude))
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<ObOperationRegistration> Operations;
+    Operations.reserve(Registration.OperationRegistrationCount);
+    for (uint16_t Index = 0; Index < Registration.OperationRegistrationCount; ++Index) {
+        GuestObOperationRegistration GuestOperation = {};
+        const uint64_t OperationAddress =
+            Registration.OperationRegistration + (uint64_t)Index * sizeof(GuestOperation);
+        if (!CallbackRuntime::ReadGuest(
+                Engine, OperationAddress, &GuestOperation, sizeof(GuestOperation)) ||
+            !GuestOperation.ObjectType ||
+            !(GuestOperation.Operations & (ObCallbacks::OperationHandleCreate |
+                                           ObCallbacks::OperationHandleDuplicate)) ||
+            (GuestOperation.Operations & ~(ObCallbacks::OperationHandleCreate |
+                                           ObCallbacks::OperationHandleDuplicate)) ||
+            (!GuestOperation.PreOperation && !GuestOperation.PostOperation))
+            return STATUS_INVALID_PARAMETER;
+
+        for (const auto& Existing : Operations) {
+            if (Existing.ObjectType == GuestOperation.ObjectType &&
+                (Existing.Operations & GuestOperation.Operations))
+                return STATUS_INVALID_PARAMETER;
+        }
+        Operations.push_back({
+            GuestOperation.ObjectType,
+            GuestOperation.Operations,
+            GuestOperation.PreOperation,
+            GuestOperation.PostOperation
+        });
+    }
+
+    std::lock_guard<std::mutex> Guard(g_ObCallbackLock);
+    if (g_ObCallbacks.size() >= kObRegistrationLimit)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    for (const auto& Existing : g_ObCallbacks) {
+        if (!CallbackRuntime::AltitudePrecedes(Existing.Altitude, Altitude) &&
+            !CallbackRuntime::AltitudePrecedes(Altitude, Existing.Altitude))
+            return STATUS_FLT_INSTANCE_ALTITUDE_COLLISION;
+    }
+
+    const uint64_t Sequence = g_ObSequence++;
+    const uint64_t Handle = CallbackRuntime::AllocateOpaqueHandle(
+        Engine, kObHandleMagic, Sequence, "ObCallbackHandle");
+    if (!Handle)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    if (!CallbackRuntime::WriteGuest(
+            Engine, (uint64_t)RegistrationHandle, &Handle, sizeof(Handle))) {
+        CallbackRuntime::FreeGuest(Engine, Handle);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    g_ObCallbacks.push_back({
+        Handle,
+        Registration.RegistrationContext,
+        Sequence,
+        Engine,
+        std::move(Altitude),
+        std::move(Operations)
+    });
     return STATUS_SUCCESS;
 }
 
 void h_ObUnRegisterCallbacks(PVOID RegistrationHandle) {
-
+    const uint64_t Handle = (uint64_t)RegistrationHandle;
+    uc_engine* Engine = nullptr;
+    {
+        std::lock_guard<std::mutex> Guard(g_ObCallbackLock);
+        auto It = std::find_if(g_ObCallbacks.begin(), g_ObCallbacks.end(),
+            [Handle](const ObRegistration& Entry) { return Entry.Handle == Handle; });
+        if (It == g_ObCallbacks.end())
+            return;
+        Engine = It->Engine;
+        g_ObCallbacks.erase(It);
+    }
+    CallbackRuntime::FreeGuest(Engine, Handle);
 }
 
-void* h_ObGetFilterVersion(void* arg) { return 0; }
+void* h_ObGetFilterVersion(void* arg) {
+    return (void*)(uintptr_t)kObRegistrationVersion;
+}
 
 NTSTATUS h_ObDereferenceObjectDeferDelete(PVOID Object) {
     return 0;
@@ -181,4 +371,142 @@ NTSTATUS h_ObOpenObjectByPointerWithTag(
         *HostHandle = nullptr;
     }
     return 0xC0000034;
+}
+
+NTSTATUS ObCallbacks::TriggerPre(uc_engine* Engine, OperationEvent& Event,
+    std::vector<CallbackFrame>& Frames) {
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    Frames.clear();
+    if (!Engine || !Event.Object || !Event.ObjectType ||
+        (Event.Operation != OperationHandleCreate &&
+         Event.Operation != OperationHandleDuplicate))
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<ObRegistration> Registrations;
+    {
+        std::lock_guard<std::mutex> Guard(g_ObCallbackLock);
+        Registrations = g_ObCallbacks;
+    }
+    std::stable_sort(Registrations.begin(), Registrations.end(), ObRegistrationPrecedes);
+
+    for (const auto& Registration : Registrations) {
+        for (const auto& Operation : Registration.Operations) {
+            if (Operation.ObjectType != Event.ObjectType ||
+                !(Operation.Operations & Event.Operation))
+                continue;
+
+            GuestObPreParameters Parameters = {};
+            Parameters.DesiredAccess = Event.DesiredAccess;
+            Parameters.OriginalDesiredAccess = Event.OriginalDesiredAccess;
+            Parameters.SourceProcess = Event.SourceProcess;
+            Parameters.TargetProcess = Event.TargetProcess;
+            const uint64_t ParametersAddress = CallbackRuntime::AllocateGuestCopy(
+                Engine, &Parameters, sizeof(Parameters), "ObPreParameters");
+            if (!ParametersAddress)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
+            GuestObPreInformation Information = {};
+            Information.Operation = Event.Operation;
+            Information.Flags = Event.Flags;
+            Information.Object = Event.Object;
+            Information.ObjectType = Event.ObjectType;
+            Information.Parameters = ParametersAddress;
+            const uint64_t InformationAddress = CallbackRuntime::AllocateGuestCopy(
+                Engine, &Information, sizeof(Information), "ObPreInformation");
+            if (!InformationAddress) {
+                CallbackRuntime::FreeGuest(Engine, ParametersAddress);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+
+            NTSTATUS Status = STATUS_SUCCESS;
+            if (Operation.PreOperation) {
+                const uint64_t Arguments[] = {
+                    Registration.Context,
+                    InformationAddress
+                };
+                uint64_t PreResult = 0;
+                if (!CallbackRuntime::InvokeGuest(
+                        Engine, Operation.PreOperation, Arguments, 2, &PreResult))
+                    Status = (NTSTATUS)0xC0000001L;
+            }
+
+            if (Status >= 0 &&
+                (!CallbackRuntime::ReadGuest(
+                    Engine, ParametersAddress, &Parameters, sizeof(Parameters)) ||
+                 !CallbackRuntime::ReadGuest(
+                    Engine, InformationAddress, &Information, sizeof(Information))))
+                Status = STATUS_INVALID_PARAMETER;
+
+            CallbackRuntime::FreeGuest(Engine, InformationAddress);
+            CallbackRuntime::FreeGuest(Engine, ParametersAddress);
+            if (Status < 0)
+                return Status;
+
+            Event.DesiredAccess = Parameters.DesiredAccess;
+            if (Operation.PostOperation) {
+                Frames.push_back({
+                    Registration.Handle,
+                    Operation.PostOperation,
+                    Registration.Context,
+                    Information.CallContext
+                });
+            }
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS ObCallbacks::TriggerPost(uc_engine* Engine, const OperationEvent& Event,
+    std::vector<CallbackFrame>& Frames) {
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    if (!Engine || !Event.Object || !Event.ObjectType ||
+        (Event.Operation != OperationHandleCreate &&
+         Event.Operation != OperationHandleDuplicate))
+        return STATUS_INVALID_PARAMETER;
+
+    NTSTATUS Result = STATUS_SUCCESS;
+    for (auto It = Frames.rbegin(); It != Frames.rend(); ++It) {
+        GuestObPostParameters Parameters = {};
+        Parameters.GrantedAccess = Event.GrantedAccess;
+        const uint64_t ParametersAddress = CallbackRuntime::AllocateGuestCopy(
+            Engine, &Parameters, sizeof(Parameters), "ObPostParameters");
+        if (!ParametersAddress) {
+            Result = STATUS_INSUFFICIENT_RESOURCES;
+            continue;
+        }
+
+        GuestObPostInformation Information = {};
+        Information.Operation = Event.Operation;
+        Information.Flags = Event.Flags;
+        Information.Object = Event.Object;
+        Information.ObjectType = Event.ObjectType;
+        Information.CallContext = It->CallContext;
+        Information.ReturnStatus = Event.ReturnStatus;
+        Information.Parameters = ParametersAddress;
+        const uint64_t InformationAddress = CallbackRuntime::AllocateGuestCopy(
+            Engine, &Information, sizeof(Information), "ObPostInformation");
+        if (!InformationAddress) {
+            CallbackRuntime::FreeGuest(Engine, ParametersAddress);
+            Result = STATUS_INSUFFICIENT_RESOURCES;
+            continue;
+        }
+
+        const uint64_t Arguments[] = {
+            It->RegistrationContext,
+            InformationAddress
+        };
+        if (!CallbackRuntime::InvokeGuest(
+                Engine, It->PostOperation, Arguments, 2, nullptr))
+            Result = (NTSTATUS)0xC0000001L;
+
+        CallbackRuntime::FreeGuest(Engine, InformationAddress);
+        CallbackRuntime::FreeGuest(Engine, ParametersAddress);
+    }
+    Frames.clear();
+    return Result;
+}
+
+size_t ObCallbacks::RegisteredCount() {
+    std::lock_guard<std::mutex> Guard(g_ObCallbackLock);
+    return g_ObCallbacks.size();
 }

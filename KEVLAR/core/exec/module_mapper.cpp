@@ -7,7 +7,7 @@
 #include "core/memory/unicorn_memory.h"
 #include <malloc.h>
 
-uint64_t UnicornEmu::AllocateSentinel(const char* FuncName, PVOID HostFunc, bool IsPassthrough) {
+uint64_t UnicornEmu::AllocateSentinel(const char* FuncName, PVOID HostFunc, bool IsPassthrough, const char* ModuleName) {
     std::unique_lock<std::shared_mutex> Guard(EngineLock);
 
     NextSentinelAddr = (NextSentinelAddr + 0xF) & ~0xFULL;
@@ -20,6 +20,7 @@ uint64_t UnicornEmu::AllocateSentinel(const char* FuncName, PVOID HostFunc, bool
     uint64_t Addr = NextSentinelAddr;
 
     StubEntry Entry;
+    Entry.Module = ModuleName ? ModuleName : "ntoskrnl.exe";
     Entry.Name = std::string(FuncName);
     Entry.HostFunc = HostFunc;
     Entry.SentinelAddr = Addr;
@@ -110,15 +111,15 @@ void UnicornEmu::BuildSentinelIat(PEFile* Module) {
             CountTotal++;
 
             if (Provider::function_providers.contains(FuncNameStr)) {
-                SentinelAddr = AllocateSentinel(FuncName, Provider::function_providers[FuncNameStr]);
+                SentinelAddr = AllocateSentinel(FuncName, Provider::function_providers[FuncNameStr], false, DllName);
                 CountProvider++;
             } else {
                 auto NtdllAddr = (PVOID)GetProcAddress(Ntdll, FuncName);
                 if (NtdllAddr) {
-                    SentinelAddr = AllocateSentinel(FuncName, NtdllAddr, true);
+                    SentinelAddr = AllocateSentinel(FuncName, NtdllAddr, true, DllName);
                     CountPassthrough++;
                 } else {
-                    SentinelAddr = AllocateSentinel(FuncName, (PVOID)Provider::unimplemented_stub);
+                    SentinelAddr = AllocateSentinel(FuncName, (PVOID)Provider::unimplemented_stub, false, DllName);
                     CountUnimplemented++;
                     UnimplList.push_back(std::string(DllName) + "!" + FuncNameStr);
                 }
@@ -238,12 +239,14 @@ uint64_t UnicornEmu::MapSystemModule(PEFile* Module, const char* Name) {
     memset(ModHostCopy, 0, (size_t)AlignedSize);
     memcpy(ModHostCopy, (void*)Module->GetMappedImageBase(), (size_t)VirtSize);
 
-    uint64_t HostLoadBase = Module->GetMappedImageBase();
+    uint64_t SourceImageBase = Module->IsRawMapped()
+        ? Module->GetImageBase()
+        : Module->GetMappedImageBase();
     uint64_t UcBase = NextSysModAddr;
     NextSysModAddr += AlignedSize + 0x10000;
     NextSysModAddr = (NextSysModAddr + 0xFFFF) & ~0xFFFFULL;
 
-    RelocateImage((unsigned char*)ModHostCopy, HostLoadBase, UcBase);
+    RelocateImage((unsigned char*)ModHostCopy, SourceImageBase, UcBase);
 
     if (!MapRegionPtr(PrimaryEngine, UcBase, AlignedSize, UC_PROT_ALL, ModHostCopy, Name))
         return 0;
@@ -262,7 +265,7 @@ uint64_t UnicornEmu::MapSystemModule(PEFile* Module, const char* Name) {
     MappedSysMods.push_back(Info);
 
     Logger::Log("{BLU}MapSystemModule '%s': UC 0x%llx (size=0x%llx, relocated from 0x%llx){RESET}\n",
-        Name, UcBase, AlignedSize, HostLoadBase);
+        Name, UcBase, AlignedSize, SourceImageBase);
 
     std::string NameLower(Name);
     for (auto& C : NameLower) C = tolower(C);

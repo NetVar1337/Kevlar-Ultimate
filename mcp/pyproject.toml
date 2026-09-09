@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kevlar-mcp"
+version = "0.1.0"
+description = "Local stdio MCP server for deterministic Kevlar driver emulation"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=2.2,<2.3",
+  "pydantic>=2.7,<3",
+]
+
+[project.scripts]
+kevlar-mcp = "kevlar_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kevlar_mcp"]

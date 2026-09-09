@@ -15,8 +15,32 @@ struct IrpCompletionInfo {
     bool Completed;
 };
 
+enum class CompletionDisposition {
+    Completed,
+    Deferred,
+    InvalidIrp,
+    AlreadyCompleted,
+    Freed
+};
+
 void Initialize();
 void Shutdown();
+
+bool RegisterIrp(uc_engine* Uc, uint64_t IrpUcAddr, CCHAR StackSize);
+void ReleaseIrp(uint64_t IrpUcAddr);
+void ResetLifecycle();
+CompletionDisposition CompleteRequest(uint64_t IrpUcAddr);
+NTSTATUS CallDriver(uint64_t DeviceObjUcAddr, uint64_t IrpUcAddr);
+uint64_t ExchangeCancelRoutine(uint64_t IrpUcAddr, uint64_t CancelRoutineUcAddr);
+BOOLEAN CancelIrp(uint64_t IrpUcAddr);
+bool MarkIrpPending(uint64_t IrpUcAddr);
+uint64_t GetCurrentStackLocation(uint64_t IrpUcAddr);
+uint64_t GetNextStackLocation(uint64_t IrpUcAddr);
+bool SkipCurrentStackLocation(uint64_t IrpUcAddr);
+bool CopyCurrentStackLocationToNext(uint64_t IrpUcAddr);
+bool SetCompletionRoutine(
+    uint64_t IrpUcAddr, uint64_t RoutineUcAddr, uint64_t ContextUcAddr,
+    bool InvokeOnSuccess, bool InvokeOnError, bool InvokeOnCancel);
 
 void SignalCompletion(uint64_t IrpUcAddr, NTSTATUS Status, ULONG_PTR Information);
 

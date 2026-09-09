@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "build": 26200,
+  "contracts": [
+    {"module":"ntoskrnl.exe","name":"Duplicate","argument_count":0,"irql_ceiling":0,"return_policy":"void"},
+    {"module":"NTOSKRNL.EXE","name":"Duplicate","argument_count":0,"irql_ceiling":0,"return_policy":"void"}
+  ]
+}

@@ -353,9 +353,21 @@ static bool RaxErrorCaught = false;
 static uint64_t LastRaxErrorRip = 0;
 static uint64_t LastRaxErrorInsn = 0;
 static int RaxErrorStreak = 0;
+static bool PlatformStatusCaught[256] = {};
 void OnRipRingTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
     uint64_t Rax = 0;
     uc_reg_read(Uc, UC_X86_REG_RAX, &Rax);
+    uint64_t Rbx = 0;
+    uc_reg_read(Uc, UC_X86_REG_RBX, &Rbx);
+    const auto PlatformStatus = (((uint32_t)Rax & 0xFFFFFF00u) == 0xC0EB0000u)
+        ? (uint32_t)Rax
+        : ((((uint32_t)Rbx & 0xFFFFFF00u) == 0xC0EB0000u) ? (uint32_t)Rbx : 0u);
+    if (PlatformStatus && !PlatformStatusCaught[PlatformStatus & 0xFFu]) {
+        PlatformStatusCaught[PlatformStatus & 0xFFu] = true;
+        Logger::Log("{RED}[PLATFORM STATUS ORIGIN] status=0x%08x RIP=0x%llx drv+0x%llx RAX=0x%llx RBX=0x%llx insn#%llu %s{RESET}\n",
+            PlatformStatus, Addr, Addr - DRIVER_BASE_UC, Rax, Rbx, RipRingTotal,
+            UnicornEmu::DisassembleAt(Uc, Addr).c_str());
+    }
     auto& E = RipRingBuf[RipRingIdx % RIP_RING_SIZE];
     E.Rip = Addr;
     E.Rax = Rax;

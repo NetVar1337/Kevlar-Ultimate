@@ -96,6 +96,9 @@ public:
     uintptr_t GetShadowBuffer();
     bool IsMapped() const;
     bool IsRawMapped() const;
+    uint16_t GetSubsystem() const;
+    uint16_t GetCharacteristics() const;
+    bool IsDll() const;
     uintmax_t GetEP();
     void SetExecutable(bool isExecutable);
     std::unordered_map<uint64_t, std::string> GetAllExports();

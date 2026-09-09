@@ -6,6 +6,8 @@ void h_KeReleaseSpinLock(PKSPIN_LOCK SpinLock, UCHAR NewIrql);
 void h_KeInitializeSpinLock(PKSPIN_LOCK SpinLock);
 UCHAR h_KeAcquireSpinLockAtDpcLevel(PKSPIN_LOCK SpinLock);
 void h_KeReleaseSpinLockFromDpcLevel(PKSPIN_LOCK SpinLock);
+void h_KeAcquireInStackQueuedSpinLockAtDpcLevel(PKSPIN_LOCK SpinLock, PVOID LockHandle);
+void h_KeReleaseInStackQueuedSpinLockFromDpcLevel(PVOID LockHandle);
 void h_KeInitializeMutex(PVOID Mutex, ULONG Level);
 LONG h_KeReleaseMutex(PVOID Mutex, BOOLEAN Wait);
 void h_KeInitializeGuardedMutex(_KGUARDED_MUTEX* Mutex);

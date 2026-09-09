@@ -1,6 +1,9 @@
 #include "include/common.h"
 #include "include/kernel_layout_consume.h"
 #include "ps_process.h"
+#include "api/ob/cm_callback.h"
+#include <algorithm>
+#include <vector>
 #include <unordered_map>
 #include <mutex>
 
@@ -8,6 +11,138 @@ _ETHREAD* h_KeGetCurrentThread();
 
 static std::mutex FakeProcessLock;
 static std::unordered_map<uint64_t, uint64_t> FakeProcessMap;
+
+namespace {
+
+struct ProcessCallbackRegistration {
+    uint64_t Function;
+    uint32_t NotifyType;
+    bool AllTypes;
+    uint64_t Sequence;
+};
+
+struct GuestPsCreateNotifyInfo {
+    uint64_t Size;
+    uint32_t Flags;
+    uint32_t Reserved;
+    uint64_t ParentProcessId;
+    uint64_t CreatingProcessId;
+    uint64_t CreatingThreadId;
+    uint64_t FileObject;
+    uint64_t ImageFileName;
+    uint64_t CommandLine;
+    int32_t CreationStatus;
+    uint32_t Reserved2;
+};
+
+struct GuestImageInfo {
+    uint32_t Properties;
+    uint32_t Reserved;
+    uint64_t ImageBase;
+    uint32_t ImageSelector;
+    uint32_t Reserved2;
+    uint64_t ImageSize;
+    uint32_t ImageSectionNumber;
+    uint32_t Reserved3;
+};
+
+struct GuestUnicodeAllocation {
+    uint64_t Descriptor = 0;
+    uint64_t Buffer = 0;
+};
+
+std::mutex g_PsCallbackLock;
+std::vector<ProcessCallbackRegistration> g_ProcessCallbacks;
+std::vector<uint64_t> g_ThreadCallbacks;
+std::vector<uint64_t> g_ImageCallbacks;
+uint64_t g_PsCallbackSequence = 1;
+constexpr size_t kPsCallbackLimit = 64;
+
+bool AllocateUnicode(uc_engine* Engine, const std::wstring& Value,
+    const char* Name, GuestUnicodeAllocation& Allocation) {
+    Allocation = {};
+    if (Value.size() > 32766)
+        return false;
+    if (Value.empty())
+        return true;
+
+    std::vector<wchar_t> Terminated(Value.begin(), Value.end());
+    Terminated.push_back(L'\0');
+    Allocation.Buffer = CallbackRuntime::AllocateGuestCopy(
+        Engine, Terminated.data(), Terminated.size() * sizeof(wchar_t), Name);
+    if (!Allocation.Buffer)
+        return false;
+
+    UNICODE_STRING Descriptor = {};
+    Descriptor.Length = (USHORT)(Value.size() * sizeof(wchar_t));
+    Descriptor.MaximumLength = (USHORT)(Terminated.size() * sizeof(wchar_t));
+    Descriptor.Buffer = (PWSTR)Allocation.Buffer;
+    Allocation.Descriptor = CallbackRuntime::AllocateGuestCopy(
+        Engine, &Descriptor, sizeof(Descriptor), Name);
+    if (!Allocation.Descriptor) {
+        CallbackRuntime::FreeGuest(Engine, Allocation.Buffer);
+        Allocation.Buffer = 0;
+        return false;
+    }
+    return true;
+}
+
+void FreeUnicode(uc_engine* Engine, GuestUnicodeAllocation& Allocation) {
+    CallbackRuntime::FreeGuest(Engine, Allocation.Descriptor);
+    CallbackRuntime::FreeGuest(Engine, Allocation.Buffer);
+    Allocation = {};
+}
+
+NTSTATUS SetProcessCallback(PVOID Function, uint32_t NotifyType, bool AllTypes, BOOLEAN Remove) {
+    if (!Function)
+        return STATUS_INVALID_PARAMETER;
+
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    auto It = std::find_if(g_ProcessCallbacks.begin(), g_ProcessCallbacks.end(),
+        [Function](const ProcessCallbackRegistration& Entry) {
+            return Entry.Function == (uint64_t)Function;
+        });
+    if (Remove) {
+        if (It == g_ProcessCallbacks.end())
+            return STATUS_INVALID_PARAMETER;
+        g_ProcessCallbacks.erase(It);
+        return STATUS_SUCCESS;
+    }
+    if (It != g_ProcessCallbacks.end())
+        return STATUS_INVALID_PARAMETER;
+    if (g_ProcessCallbacks.size() >= kPsCallbackLimit)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    g_ProcessCallbacks.push_back({
+        (uint64_t)Function, NotifyType, AllTypes, g_PsCallbackSequence++
+    });
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS AddSimpleCallback(std::vector<uint64_t>& Callbacks, PVOID Function) {
+    if (!Function)
+        return STATUS_INVALID_PARAMETER;
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    if (std::find(Callbacks.begin(), Callbacks.end(), (uint64_t)Function) != Callbacks.end())
+        return STATUS_INVALID_PARAMETER;
+    if (Callbacks.size() >= kPsCallbackLimit)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Callbacks.push_back((uint64_t)Function);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS RemoveSimpleCallback(std::vector<uint64_t>& Callbacks, PVOID Function,
+    NTSTATUS MissingStatus) {
+    if (!Function)
+        return MissingStatus;
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    auto It = std::find(Callbacks.begin(), Callbacks.end(), (uint64_t)Function);
+    if (It == Callbacks.end())
+        return MissingStatus;
+    Callbacks.erase(It);
+    return STATUS_SUCCESS;
+}
+
+}
 
 PVOID h_PsGetProcessWow64Process(_EPROCESS* Process) {
     auto HostProc = UcPtr(Process);
@@ -218,14 +353,12 @@ PACCESS_TOKEN h_PsReferencePrimaryToken(_EPROCESS* Process) {
     return a1;
 }
 
-NTSTATUS h_PsRemoveLoadImageNotifyRoutine(void* NotifyRoutine) { return STATUS_PROCEDURE_NOT_FOUND; }
+NTSTATUS h_PsRemoveLoadImageNotifyRoutine(void* NotifyRoutine) {
+    return RemoveSimpleCallback(g_ImageCallbacks, NotifyRoutine, STATUS_PROCEDURE_NOT_FOUND);
+}
 
 NTSTATUS h_PsSetCreateProcessNotifyRoutineEx(void* NotifyRoutine, BOOLEAN Remove) {
-    if (Remove) {
-        return STATUS_INVALID_PARAMETER;
-    } else {
-        return STATUS_SUCCESS;
-    }
+    return SetProcessCallback(NotifyRoutine, 0, true, Remove);
 }
 
 NTSTATUS h_PsCreateSystemThread(PHANDLE ThreadHandle, ULONG DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes, HANDLE ProcessHandle, void* ClientId,
@@ -251,9 +384,17 @@ NTSTATUS h_PsTerminateSystemThread(NTSTATUS exitstatus) {
     ExitThread(exitstatus);
 }
 
-NTSTATUS h_PsSetCreateThreadNotifyRoutine(PVOID NotifyRoutine) { return STATUS_SUCCESS; }
+NTSTATUS h_PsSetCreateThreadNotifyRoutine(PVOID NotifyRoutine) {
+    return AddSimpleCallback(g_ThreadCallbacks, NotifyRoutine);
+}
 
-NTSTATUS h_PsSetLoadImageNotifyRoutine(PVOID NotifyRoutine) { return STATUS_SUCCESS; }
+NTSTATUS h_PsRemoveCreateThreadNotifyRoutine(PVOID NotifyRoutine) {
+    return RemoveSimpleCallback(g_ThreadCallbacks, NotifyRoutine, STATUS_PROCEDURE_NOT_FOUND);
+}
+
+NTSTATUS h_PsSetLoadImageNotifyRoutine(PVOID NotifyRoutine) {
+    return AddSimpleCallback(g_ImageCallbacks, NotifyRoutine);
+}
 
 HANDLE h_PsGetThreadProcessId(_ETHREAD* Thread) {
     if (Thread) {
@@ -343,7 +484,9 @@ void h_PsReleaseProcessExitSynchronization(_EPROCESS* Process) {
 }
 
 NTSTATUS h_PsSetCreateProcessNotifyRoutineEx2(uint32_t NotifyType, PVOID NotifyInformation, BOOLEAN Remove) {
-    return STATUS_SUCCESS;
+    if (NotifyType != 0)
+        return STATUS_INVALID_PARAMETER;
+    return SetProcessCallback(NotifyInformation, NotifyType, false, Remove);
 }
 
 NTSTATUS h_PsSuspendProcess(void* Process) {
@@ -369,4 +512,163 @@ NTSTATUS h_PsGetProcessExitStatus(void* Process) {
 void* h_PsGetProcessWin32Process(void* Process) {
     Logger::Log("{CYN}\tPsGetProcessWin32Process: process=%p{RESET}\n", Process);
     return nullptr;
+}
+
+NTSTATUS PsCallbacks::TriggerProcess(uc_engine* Engine, ProcessEvent& Event) {
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    if (!Engine || !Event.ProcessId)
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<ProcessCallbackRegistration> Callbacks;
+    {
+        std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+        for (const auto& Entry : g_ProcessCallbacks) {
+            if (Entry.AllTypes || Entry.NotifyType == Event.NotifyType)
+                Callbacks.push_back(Entry);
+        }
+    }
+    std::stable_sort(Callbacks.begin(), Callbacks.end(),
+        [](const ProcessCallbackRegistration& Left, const ProcessCallbackRegistration& Right) {
+            return Left.Sequence < Right.Sequence;
+        });
+
+    GuestUnicodeAllocation ImageName;
+    GuestUnicodeAllocation CommandLine;
+    uint64_t CreateInfoAddress = 0;
+    GuestPsCreateNotifyInfo CreateInfo = {};
+    if (Event.Create) {
+        if (!AllocateUnicode(Engine, Event.ImageFileName, "PsImageName", ImageName) ||
+            !AllocateUnicode(Engine, Event.CommandLine, "PsCommandLine", CommandLine)) {
+            FreeUnicode(Engine, ImageName);
+            FreeUnicode(Engine, CommandLine);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        CreateInfo.Size = sizeof(CreateInfo);
+        CreateInfo.Flags = Event.Flags;
+        CreateInfo.ParentProcessId = Event.ParentProcessId;
+        CreateInfo.CreatingProcessId = Event.CreatingProcessId;
+        CreateInfo.CreatingThreadId = Event.CreatingThreadId;
+        CreateInfo.FileObject = Event.FileObject;
+        CreateInfo.ImageFileName = ImageName.Descriptor;
+        CreateInfo.CommandLine = CommandLine.Descriptor;
+        CreateInfo.CreationStatus = Event.CreationStatus;
+        CreateInfoAddress = CallbackRuntime::AllocateGuestCopy(
+            Engine, &CreateInfo, sizeof(CreateInfo), "PsCreateNotifyInfo");
+        if (!CreateInfoAddress) {
+            FreeUnicode(Engine, ImageName);
+            FreeUnicode(Engine, CommandLine);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    NTSTATUS Status = Event.CreationStatus;
+    for (const auto& Entry : Callbacks) {
+        const uint64_t Arguments[] = {
+            Event.Process,
+            Event.ProcessId,
+            Event.Create ? CreateInfoAddress : 0
+        };
+        if (!CallbackRuntime::InvokeGuest(Engine, Entry.Function, Arguments, 3, nullptr)) {
+            Status = (NTSTATUS)0xC0000001L;
+            break;
+        }
+        if (Event.Create) {
+            if (!CallbackRuntime::ReadGuest(
+                    Engine, CreateInfoAddress, &CreateInfo, sizeof(CreateInfo))) {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            Status = CreateInfo.CreationStatus;
+        }
+    }
+
+    if (Event.Create) {
+        Event.Flags = CreateInfo.Flags;
+        Event.CreationStatus = Status;
+        CallbackRuntime::FreeGuest(Engine, CreateInfoAddress);
+        FreeUnicode(Engine, ImageName);
+        FreeUnicode(Engine, CommandLine);
+    }
+    return Status;
+}
+
+NTSTATUS PsCallbacks::TriggerThread(uc_engine* Engine, uint64_t ProcessId,
+    uint64_t ThreadId, bool Create) {
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    if (!Engine || !ProcessId || !ThreadId)
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<uint64_t> Callbacks;
+    {
+        std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+        Callbacks = g_ThreadCallbacks;
+    }
+    for (uint64_t Function : Callbacks) {
+        const uint64_t Arguments[] = { ProcessId, ThreadId, Create ? 1ULL : 0ULL };
+        if (!CallbackRuntime::InvokeGuest(Engine, Function, Arguments, 3, nullptr))
+            return (NTSTATUS)0xC0000001L;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS PsCallbacks::TriggerImage(uc_engine* Engine, const ImageEvent& Event) {
+    Engine = CallbackRuntime::SelectEngine(Engine);
+    if (!Engine || !Event.ProcessId)
+        return STATUS_INVALID_PARAMETER;
+
+    std::vector<uint64_t> Callbacks;
+    {
+        std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+        Callbacks = g_ImageCallbacks;
+    }
+
+    GuestUnicodeAllocation FullImageName;
+    if (!AllocateUnicode(Engine, Event.FullImageName, "PsFullImageName", FullImageName))
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    GuestImageInfo ImageInfo = {};
+    ImageInfo.Properties = Event.Properties;
+    ImageInfo.ImageBase = Event.ImageBase;
+    ImageInfo.ImageSelector = Event.ImageSelector;
+    ImageInfo.ImageSize = Event.ImageSize;
+    ImageInfo.ImageSectionNumber = Event.ImageSectionNumber;
+    const uint64_t ImageInfoAddress = CallbackRuntime::AllocateGuestCopy(
+        Engine, &ImageInfo, sizeof(ImageInfo), "PsImageInfo");
+    if (!ImageInfoAddress) {
+        FreeUnicode(Engine, FullImageName);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    NTSTATUS Status = STATUS_SUCCESS;
+    for (uint64_t Function : Callbacks) {
+        const uint64_t Arguments[] = {
+            FullImageName.Descriptor,
+            Event.ProcessId,
+            ImageInfoAddress
+        };
+        if (!CallbackRuntime::InvokeGuest(Engine, Function, Arguments, 3, nullptr)) {
+            Status = (NTSTATUS)0xC0000001L;
+            break;
+        }
+    }
+
+    CallbackRuntime::FreeGuest(Engine, ImageInfoAddress);
+    FreeUnicode(Engine, FullImageName);
+    return Status;
+}
+
+size_t PsCallbacks::ProcessCallbackCount() {
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    return g_ProcessCallbacks.size();
+}
+
+size_t PsCallbacks::ThreadCallbackCount() {
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    return g_ThreadCallbacks.size();
+}
+
+size_t PsCallbacks::ImageCallbackCount() {
+    std::lock_guard<std::mutex> Guard(g_PsCallbackLock);
+    return g_ImageCallbacks.size();
 }

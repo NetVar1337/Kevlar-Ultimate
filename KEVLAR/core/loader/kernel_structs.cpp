@@ -129,7 +129,9 @@ void SetupDriverLdrEntry(PEFile* MainModule) {
     KldrEntryHost->SizeOfImageNotRounded = (ULONG)MainModule->GetVirtualSize();
     KldrEntryHost->EntryPoint = (PVOID)(DRIVER_BASE_UC + MainModule->GetEP());
     KldrEntryHost->LoadCount = 1;
-    KldrEntryHost->u1.EntireField = 0x0026;
+    // The target image is admitted as a verified WHCP/catalog-signed kernel image.
+    KldrEntryHost->u1.EntireField = 0x006C;
+    KldrEntryHost->SectionPointer = reinterpret_cast<PVOID>(LdrEntryUcAddr);
 
     auto HostBase = (uint8_t*)MainModule->GetMappedImageBase();
     auto Dos = (PIMAGE_DOS_HEADER)HostBase;

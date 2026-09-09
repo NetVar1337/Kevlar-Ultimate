@@ -13,6 +13,7 @@ struct DeviceInfo {
     ULONG DeviceType;
     uint64_t ExtensionUcAddr;
     ULONG ExtensionSize;
+    uint64_t AttachedToUcAddr = 0;
 };
 
 extern std::vector<DeviceInfo> Devices;
@@ -37,6 +38,33 @@ NTSTATUS h_IoQueryFileDosDeviceName(PVOID fileObject, PVOID* name_info);
 NTSTATUS h_IoWMIOpenBlock(LPCGUID Guid, ULONG DesiredAccess, PVOID* DataBlockObject);
 NTSTATUS h_IoWMIQueryAllData(PVOID DataBlockObject, PULONG InOutBufferSize, PVOID OutBuffer);
 void h_IofCompleteRequest(void* pirp, CHAR boost);
+_IRP* h_IoAllocateIrp(CCHAR StackSize, BOOLEAN ChargeQuota);
+void h_IoFreeIrp(_IRP* Irp);
+BOOLEAN h_IoCancelIrp(_IRP* Irp);
+PVOID h_IoSetCancelRoutine(_IRP* Irp, PVOID CancelRoutine);
+void h_IoMarkIrpPending(_IRP* Irp);
+NTSTATUS h_IofCallDriver(_DEVICE_OBJECT* DeviceObject, _IRP* Irp);
+NTSTATUS h_IoCallDriver(_DEVICE_OBJECT* DeviceObject, _IRP* Irp);
+_IO_STACK_LOCATION* h_IoGetCurrentIrpStackLocation(_IRP* Irp);
+_IO_STACK_LOCATION* h_IoGetNextIrpStackLocation(_IRP* Irp);
+void h_IoSkipCurrentIrpStackLocation(_IRP* Irp);
+void h_IoCopyCurrentIrpStackLocationToNext(_IRP* Irp);
+void h_IoSetCompletionRoutine(
+    _IRP* Irp, PVOID CompletionRoutine, PVOID Context,
+    BOOLEAN InvokeOnSuccess, BOOLEAN InvokeOnError, BOOLEAN InvokeOnCancel);
+NTSTATUS h_IoSetCompletionRoutineEx(
+    _DEVICE_OBJECT* DeviceObject, _IRP* Irp, PVOID CompletionRoutine, PVOID Context,
+    BOOLEAN InvokeOnSuccess, BOOLEAN InvokeOnError, BOOLEAN InvokeOnCancel);
+_DEVICE_OBJECT* h_IoAttachDeviceToDeviceStack(
+    _DEVICE_OBJECT* SourceDevice, _DEVICE_OBJECT* TargetDevice);
+NTSTATUS h_IoAttachDeviceToDeviceStackSafe(
+    _DEVICE_OBJECT* SourceDevice, _DEVICE_OBJECT* TargetDevice,
+    _DEVICE_OBJECT** AttachedToDeviceObject);
+NTSTATUS h_IoAttachDevice(
+    _DEVICE_OBJECT* SourceDevice, PUNICODE_STRING TargetDevice,
+    _DEVICE_OBJECT** AttachedDevice);
+void h_IoDetachDevice(_DEVICE_OBJECT* TargetDevice);
+PVOID h_IoGetAttachedDevice(_DEVICE_OBJECT* DeviceObject);
 NTSTATUS h_IoGetDeviceInterfaces(const GUID* InterfaceClassGuid, _DEVICE_OBJECT* PhysicalDeviceObject, ULONG Flags, wchar_t** SymbolicLinkList);
 NTSTATUS h_IoCreateNotificationEvent(PUNICODE_STRING EventName, PHANDLE EventHandle);
 PVOID h_IoGetAttachedDeviceReference(_DEVICE_OBJECT* DeviceObject);

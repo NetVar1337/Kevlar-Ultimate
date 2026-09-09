@@ -7,6 +7,7 @@
 #include <PEMapper/pefile.h>
 #include <SymParser/symparser.hpp>
 #include <filesystem>
+#include <fstream>
 
 namespace fs = std::filesystem;
 
@@ -18,6 +19,41 @@ struct KldrEntryInfo {
     std::wstring BaseDllNameStr;
     uint64_t ModuleUcBase;
 };
+
+static std::string ResolveHostModulePath(const char* NtPath) {
+    if (!NtPath) return {};
+    std::string Path = NtPath;
+    const std::string SystemRootPrefix = "\\SystemRoot\\";
+    if (Path.rfind(SystemRootPrefix, 0) == 0) {
+        char WindowsDirectory[MAX_PATH] = {};
+        GetWindowsDirectoryA(WindowsDirectory, MAX_PATH);
+        return std::string(WindowsDirectory) + "\\"
+            + Path.substr(SystemRootPrefix.size());
+    }
+    if (Path.rfind("\\??\\", 0) == 0)
+        return Path.substr(4);
+    return Path;
+}
+
+static void PopulatePeIdentity(const std::string& Path, KLDR_DATA_TABLE_ENTRY& Entry) {
+    std::ifstream File(Path, std::ios::binary);
+    IMAGE_DOS_HEADER Dos = {};
+    if (!File.read(reinterpret_cast<char*>(&Dos), sizeof(Dos))
+        || Dos.e_magic != IMAGE_DOS_SIGNATURE || Dos.e_lfanew <= 0)
+        return;
+    File.seekg(Dos.e_lfanew);
+    IMAGE_NT_HEADERS64 Nt = {};
+    if (!File.read(reinterpret_cast<char*>(&Nt), sizeof(Nt))
+        || Nt.Signature != IMAGE_NT_SIGNATURE
+        || Nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return;
+    Entry.TimeDateStamp = Nt.FileHeader.TimeDateStamp;
+    Entry.CheckSum = Nt.OptionalHeader.CheckSum;
+    if (Nt.OptionalHeader.SizeOfImage) {
+        Entry.SizeOfImage = Nt.OptionalHeader.SizeOfImage;
+        Entry.SizeOfImageNotRounded = Nt.OptionalHeader.SizeOfImage;
+    }
+}
 
 void Environment::InitializeSystemModules() {
     auto pNtQuerySystemInformation = (fnNtQuerySystemInformation)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQuerySystemInformation");
@@ -60,10 +96,12 @@ void Environment::InitializeSystemModules() {
         "hcmon.sys", "vmnetadapter.sys", "vmnat.sys", "vmnetdhcp.sys",
         "vboxguest.sys", "vboxsf.sys", "vboxmouse.sys", "vboxvideo.sys",
         "vboxdrv.sys", "vboxnetadp.sys", "vboxnetflt.sys",
-        "parsecvusba.sys",
-        "droidcamvideo.sys", "droidcamaudio.sys",
-        "iriuna0.sys",
-        "vbaudio_cable64_win10.sys",
+        "parsecvusba.sys", "droidcamvideo.sys", "droidcamaudio.sys",
+        "iriuna0.sys", "vbaudio_cable64_win10.sys",
+        "vmbus.sys", "vmsproxy.sys", "vmsproxyhnic.sys", "winhvr.sys",
+        "vid.sys", "hypervideo.sys", "storvsp.sys", "netvsc.sys",
+        "vmbkmclr.sys", "hvservice.sys", "vmstorfl.sys",
+        "npcap.sys", "vigembus.sys",
         "faceit_ac.sys", "faceit_iommu.sys", "vgk.sys",
     };
 
@@ -124,14 +162,20 @@ void Environment::InitializeSystemModules() {
 
         Info.FullDllNameStr = UtilWidestringFromString((const char*)ModInfo.FullPathName);
         Info.BaseDllNameStr = UtilWidestringFromString((const char*)ModInfo.FullPathName + ModInfo.OffsetToFileName);
+        const std::string HostModulePath = ResolveHostModulePath((const char*)ModInfo.FullPathName);
+        PopulatePeIdentity(HostModulePath, KldrEntry);
 
         RtlInitUnicodeString(&KldrEntry.FullDllName, Info.FullDllNameStr.c_str());
         RtlInitUnicodeString(&KldrEntry.BaseDllName, Info.BaseDllNameStr.c_str());
 
-        const auto ImportLocalFile = KevlarGlobal::GetImportDir() + Filename;
+        const auto LocalOverride = KevlarGlobal::GetImportDir() + Filename;
+
+        const bool UsingLocalOverride = fs::exists(LocalOverride);
+        const std::string ImportFile = UsingLocalOverride
+            ? LocalOverride : (fs::exists(HostModulePath) ? HostModulePath : std::string());
         bool ModuleLoaded = false;
-        if (fs::exists(ImportLocalFile)) {
-            auto PeFile = PEFile::Open(ImportLocalFile, Filename);
+        if (!ImportFile.empty()) {
+            auto PeFile = PEFile::Open(ImportFile, Filename);
             if (PeFile) {
                 uint64_t UcBase = UnicornEmu::MapSystemModule(PeFile, Filename);
                 if (UcBase) {
@@ -148,9 +192,11 @@ void Environment::InitializeSystemModules() {
                         KldrEntry.ExceptionTableSize = ExcDir.Size;
                     }
 
-                    Logger::Log("{CYN}PDB for %s{RESET}\n", ImportLocalFile.c_str());
-                    if (FilenameLower.find("ntoskrnl") == std::string::npos)
-                        symparser::download_symbols(ImportLocalFile);
+                    if (UsingLocalOverride) {
+                        Logger::Log("{CYN}PDB for %s{RESET}\n", ImportFile.c_str());
+                        if (FilenameLower.find("ntoskrnl") == std::string::npos)
+                            symparser::download_symbols(ImportFile);
+                    }
                     ModuleLoaded = true;
                 } else {
                     Logger::Log("{YEL}MapSystemModule returned 0 for %s, using stub{RESET}\n", Filename);
@@ -169,6 +215,8 @@ void Environment::InitializeSystemModules() {
             Info.ModuleUcBase = StubBase;
             KldrEntry.DllBase = (PVOID)StubBase;
             KldrEntry.EntryPoint = (PVOID)StubBase;
+            KldrEntry.SizeOfImage = 0x2000;
+            KldrEntry.SizeOfImageNotRounded = 0x2000;
             StubCount++;
         }
 
@@ -255,4 +303,87 @@ void Environment::CheckPtr(uint64_t Ptr) {
         }
     }
     return;
+}
+
+bool Environment::AddModuleFromFile(
+    const std::string& Path, const std::wstring& GuestFullName) {
+    std::filesystem::path FilePath(Path);
+    if (!std::filesystem::exists(FilePath))
+        return false;
+    const std::string BaseName = FilePath.filename().string();
+    auto Module = PEFile::Open(Path, BaseName);
+    if (!Module)
+        return false;
+    const uint64_t ModuleBase = UnicornEmu::MapSystemModule(Module, BaseName.c_str());
+    if (!ModuleBase)
+        return false;
+
+    const std::wstring FullName = GuestFullName.empty()
+        ? (L"\\SystemRoot\\system32\\drivers\\" + FilePath.filename().wstring())
+        : GuestFullName;
+    const std::wstring WideBase = FilePath.filename().wstring();
+    const size_t EntrySize = sizeof(KLDR_DATA_TABLE_ENTRY) + 0x400;
+    const uint64_t EntryUc = UnicornMem::AllocateVariable(
+        UnicornEmu::PrimaryEngine, EntrySize, ("KldrEntry." + BaseName).c_str());
+    auto Entry = reinterpret_cast<PKLDR_DATA_TABLE_ENTRY>(
+        UnicornMem::UcToHost(EntryUc));
+    if (!Entry)
+        return false;
+    memset(Entry, 0, EntrySize);
+
+    Entry->DllBase = reinterpret_cast<PVOID>(ModuleBase);
+    Entry->EntryPoint = reinterpret_cast<PVOID>(ModuleBase + Module->GetEP());
+    Entry->SizeOfImage = static_cast<ULONG>(Module->GetVirtualSize());
+    Entry->SizeOfImageNotRounded = Entry->SizeOfImage;
+    Entry->Flags = 0x20;
+    Entry->LoadCount = 1;
+    Entry->u1.EntireField = 0x26;
+
+    auto HostBase = reinterpret_cast<uint8_t*>(Module->GetMappedImageBase());
+    auto Dos = reinterpret_cast<PIMAGE_DOS_HEADER>(HostBase);
+    auto Nt = reinterpret_cast<PIMAGE_NT_HEADERS64>(HostBase + Dos->e_lfanew);
+    Entry->CheckSum = Nt->OptionalHeader.CheckSum;
+    Entry->TimeDateStamp = Nt->FileHeader.TimeDateStamp;
+    const auto& Exception = Nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    if (Exception.VirtualAddress && Exception.Size) {
+        Entry->ExceptionTable = reinterpret_cast<PVOID>(ModuleBase + Exception.VirtualAddress);
+        Entry->ExceptionTableSize = Exception.Size;
+    }
+
+    size_t Offset = (sizeof(KLDR_DATA_TABLE_ENTRY) + 0xF) & ~size_t(0xF);
+    const size_t FullBytes = (FullName.size() + 1) * sizeof(wchar_t);
+    const size_t BaseOffset = (Offset + FullBytes + 0xF) & ~size_t(0xF);
+    const size_t BaseBytes = (WideBase.size() + 1) * sizeof(wchar_t);
+    if (BaseOffset + BaseBytes > EntrySize)
+        return false;
+    memcpy(reinterpret_cast<uint8_t*>(Entry) + Offset, FullName.c_str(), FullBytes);
+    memcpy(reinterpret_cast<uint8_t*>(Entry) + BaseOffset, WideBase.c_str(), BaseBytes);
+    Entry->FullDllName = {
+        static_cast<USHORT>(FullName.size() * sizeof(wchar_t)),
+        static_cast<USHORT>(FullBytes),
+        reinterpret_cast<PWCH>(EntryUc + Offset),
+    };
+    Entry->BaseDllName = {
+        static_cast<USHORT>(WideBase.size() * sizeof(wchar_t)),
+        static_cast<USHORT>(BaseBytes),
+        reinterpret_cast<PWCH>(EntryUc + BaseOffset),
+    };
+
+    const uint64_t HeadUc = reinterpret_cast<uint64_t>(PsLoadedModuleList);
+    auto Head = reinterpret_cast<PLIST_ENTRY>(UnicornMem::UcToHost(HeadUc));
+    if (!Head)
+        return false;
+    const uint64_t LastUc = reinterpret_cast<uint64_t>(Head->Blink);
+    auto Last = reinterpret_cast<PLIST_ENTRY>(UnicornMem::UcToHost(LastUc));
+    Entry->InLoadOrderLinks.Flink = reinterpret_cast<PLIST_ENTRY>(HeadUc);
+    Entry->InLoadOrderLinks.Blink = reinterpret_cast<PLIST_ENTRY>(LastUc);
+    if (Last)
+        Last->Flink = reinterpret_cast<PLIST_ENTRY>(EntryUc);
+    Head->Blink = reinterpret_cast<PLIST_ENTRY>(EntryUc);
+
+    Entry->SectionPointer = reinterpret_cast<PVOID>(EntryUc);
+    environment_module[ModuleBase] = *Entry;
+    Logger::Log("{CYN}Added companion module %s at UC 0x%llx size=0x%x{RESET}\n",
+        BaseName.c_str(), ModuleBase, Entry->SizeOfImage);
+    return true;
 }

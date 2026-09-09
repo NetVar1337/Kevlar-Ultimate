@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include "core/profile/active_profile.h"
 
 namespace CpuProfile {
 
@@ -26,9 +27,21 @@ inline constexpr uint32_t kLogicalProcessorCount = 16;
 inline constexpr uint64_t kInitialVirtualTsc = 0x1C0000000000ULL;
 // KUSER_SHARED_DATA SystemTime (100ns since 1601), fixed ~2024-07 value.
 inline constexpr int64_t kEmulatedSystemTimeBase = 0x01DB2E7F4B7A0000LL;
+inline uint64_t ProfileTscHz() { return Kevlar::Profile::Active().Cpu.TscFrequencyHz; }
+inline uint32_t LogicalProcessorCount() { return Kevlar::Profile::Active().Cpu.LogicalProcessorCount; }
+inline uint64_t InitialVirtualTsc() { return Kevlar::Profile::Active().Cpu.InitialTsc; }
+inline int64_t EmulatedSystemTimeBase() { return Kevlar::Profile::Active().KuserSharedData.InitialSystemTime; }
+
+inline uint32_t TopologyShift(uint32_t Count) {
+    uint32_t Shift = 0;
+    uint32_t Value = Count > 0 ? Count - 1 : 0;
+    while (Value) { ++Shift; Value >>= 1; }
+    return Shift;
+}
 
 inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
     memset(Out, 0, 16);
+    const auto& Cpu = Kevlar::Profile::Active().Cpu;
 
     switch (Leaf) {
     case 0x00: // vendor + max standard leaf
@@ -38,10 +51,10 @@ inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
         Out[2] = 0x6C65746E; // ntel
         break;
     case 0x01: // version + features, bare metal (ECX.31 hypervisor = 0)
-        Out[0] = 0x000B0671;   // Raptor Lake: family 6, model 0xB7, stepping 1
-        Out[1] = 0x00100800;   // CLFLUSH 64B, 16 logical CPUs, brand index 0
-        Out[2] = 0x7FFAB7FF;   // SSE3..RDRAND, AVX, AES, XSAVE; hypervisor bit clear
-        Out[3] = 0xBFEBFBFF;   // classic FPU..HTT bits, IA64 clear
+        Out[0] = Cpu.Signature;
+        Out[1] = ((Cpu.LogicalProcessorCount & 0xFFu) << 16) | 0x00000800;
+        Out[2] = Cpu.Leaf1Ecx & ~(1u << 31);
+        Out[3] = Cpu.Leaf1Edx;
         break;
     case 0x04: { // deterministic cache, subleaf-indexed
         switch (SubLeaf) {
@@ -54,15 +67,22 @@ inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
     }
     case 0x07:
         if (SubLeaf == 0) { // extended features
-            Out[0] = 0x00000001;     // max subleaf
-            Out[1] = 0x2000FFBB;     // FSGSBASE..AVX2, BMI1/2, ERMS, INVPCID, SHA; no AVX-512
-            Out[2] = 0x04C05700;     // GFNI, VAES, VPCLMULQDQ, RDPID, SERIALIZE, MOVDIRI/64B, CLDEMOTE
-            Out[3] = 0;              // no AVX-512_FP16/AMX/HRESET
+            Out[0] = 0x00000001;
+            Out[1] = Cpu.Leaf7Ebx;
+            Out[2] = Cpu.Leaf7Ecx;
+            Out[3] = Cpu.Leaf7Edx;
         }
         break;
     case 0x0B: // extended topology (V1)
-        if (SubLeaf == 0) { Out[1] = 1; Out[2] = 0x00000001; }               // 1 SMT
-        else if (SubLeaf == 1) { Out[0] = 15; Out[1] = 16; Out[2] = 0x00000002; } // 16 P-core
+        if (SubLeaf == 0) {
+            Out[0] = TopologyShift(Cpu.ThreadsPerCore);
+            Out[1] = Cpu.ThreadsPerCore;
+            Out[2] = 0x00000100;
+        } else if (SubLeaf == 1) {
+            Out[0] = TopologyShift(Cpu.LogicalProcessorCount);
+            Out[1] = Cpu.LogicalProcessorCount;
+            Out[2] = 0x00000201;
+        }
         break;
     case 0x0D: // XSAVE: x87+SSE+AVX only, no AVX-512
         if (SubLeaf == 0) { Out[0] = 0x00000007; Out[1] = 0x340; Out[2] = 0x340; }
@@ -74,17 +94,24 @@ inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
         else if (SubLeaf == 1) { Out[0] = 0x02490002; }
         break;
     case 0x15: // TSC / core crystal clock
-        Out[0] = 2; Out[1] = 168; Out[2] = 38400000;
+        Out[0] = Cpu.TscDenominator; Out[1] = Cpu.TscNumerator; Out[2] = static_cast<uint32_t>(Cpu.CrystalFrequencyHz);
         break;
     case 0x16: // processor frequency
-        Out[0] = 3000; Out[1] = 5800; Out[2] = 100;
+        Out[0] = Cpu.BaseFrequencyMhz; Out[1] = Cpu.MaximumFrequencyMhz; Out[2] = Cpu.BusFrequencyMhz;
         break;
     case 0x1A: // hybrid present (Raptor Lake)
         Out[0] = 1;
         break;
     case 0x1F: // extended topology (V2)
-        if (SubLeaf == 0) { Out[1] = 1; Out[2] = 0x00000000; }
-        else if (SubLeaf == 1) { Out[0] = 15; Out[1] = 16; Out[2] = 0x00000001; }
+        if (SubLeaf == 0) {
+            Out[0] = TopologyShift(Cpu.ThreadsPerCore);
+            Out[1] = Cpu.ThreadsPerCore;
+            Out[2] = 0x00000100;
+        } else if (SubLeaf == 1) {
+            Out[0] = TopologyShift(Cpu.LogicalProcessorCount);
+            Out[1] = Cpu.LogicalProcessorCount;
+            Out[2] = 0x00000201;
+        }
         break;
     // 0x40000000..0x4FFFFFFF: no hypervisor -> all zeros (already memset).
 
@@ -92,19 +119,18 @@ inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
         Out[0] = 0x80000008;
         break;
     case 0x80000001: // extended feature bits
-        Out[0] = 0x000B0671;
+        Out[0] = Cpu.Signature;
         Out[2] = 0x00000121; // LAHF/SAHF, LZCNT, PREFETCHW
         Out[3] = 0x20100000; // NX, long mode
         break;
     case 0x80000002:
     case 0x80000003:
     case 0x80000004: { // brand string, 16 bytes per leaf, zero padded
-        static const char Brand[] = "13th Gen Intel(R) Core(TM) i9-13900K";
-        static const size_t BrandLen = sizeof(Brand) - 1;
+        const auto& Brand = Cpu.Brand;
         size_t Off = (size_t)(Leaf - 0x80000002) * 16;
-        size_t Rem = (BrandLen > Off) ? (BrandLen - Off) : 0;
+        size_t Rem = (Brand.size() > Off) ? (Brand.size() - Off) : 0;
         if (Rem > 16) Rem = 16;
-        if (Rem) memcpy(Out, Brand + Off, Rem);
+        if (Rem) memcpy(Out, Brand.data() + Off, Rem);
         break;
     }
     case 0x80000005: // L1 cache
@@ -117,7 +143,7 @@ inline void Query(uint32_t Leaf, uint32_t SubLeaf, uint32_t Out[4]) {
         Out[3] = 0x00000100;
         break;
     case 0x80000008: // virtual/phys address sizes
-        Out[0] = 0x302E; // 48-bit virtual, 46-bit physical
+        Out[0] = (uint32_t)Cpu.PhysicalAddressBits | ((uint32_t)Cpu.VirtualAddressBits << 8);
         break;
     }
 }

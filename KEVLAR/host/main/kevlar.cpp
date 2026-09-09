@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <cstdio>
+#include <fstream>
 #include <atomic>
 
 #include <PEMapper/pefile.h>
@@ -20,7 +21,11 @@
 #include "host/config/config.h"
 #include "core/exec/unicorn_engine.h"
 #include "core/exec/timing_spoof.h"
+#include "core/exec/target_compat.h"
 #include "core/memory/unicorn_memory.h"
+#include "core/profile/active_profile.h"
+#include "core/hardware/hardware_runtime.h"
+#include "core/memory/guest_memory_runtime.h"
 #include "core/process/unicorn_threading.h"
 #include "core/loader/environment.h"
 #include "core/loader/kernel_structs.h"
@@ -28,6 +33,12 @@
 #include "host/providers/ntoskrnl_provider.h"
 #include "host/providers/static_export_provider.h"
 #include "host/providers/provider.h"
+#include "host/providers/export_contract_runtime.h"
+#include "host/providers/usermode_provider.h"
+#include "api/io/flt_filter.h"
+#include "api/ob/cm_callback.h"
+#include "api/ob/ob_object.h"
+#include "api/ps/ps_process.h"
 #include "core/registry/virtual_fs.h"
 #include "core/diagnostics/diag_center.h"
 #include "core/devirt/vtil_analysis.h"
@@ -39,6 +50,7 @@
 #include "api/ke/ke_event.h"
 
 static bool NoPause = false;
+static bool TargetCompatEnabled = false;
 static bool EacServiceEmu = false;
 
 // advapi32 SDDL API (declared here to avoid windows.h include-order churn)
@@ -247,11 +259,17 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --no-pause              Skip final pause; exit ~5s after a no-thread run (automation){RESET}\n");
         Logger::Log("  --workers-deep          Worker threads use the extended emulation loop (SSE-fault dispatch + INSN_INVALID retry); default is raw uc_emu_start vendor parity{RESET}\n");
         Logger::Log("  --eac-service-emu       Create host-side EAC service IPC objects (Global\\EasyAntiCheat_EOSBin section + EventDriver/Game/Module) before DriverEntry{RESET}\n");
+        Logger::Log("  --inject-hypervideo      Expose synthetic Hyper-V video module for targets that require it{RESET}\n");
         Logger::Log("  --vtil-rva <rva>        Lift a bounded AMD64 region into optimized VTIL{RESET}\n");
         Logger::Log("  --vtil-size <bytes>     Bytes available to the VTIL lifter (default: 0x5000){RESET}\n");
+        Logger::Log("  --target-compat          Enable exact-version status normalization for analysis{RESET}\n");
+        Logger::Log("  --no-target-compat       Disable exact-version target continuation hooks{RESET}\n");
         Logger::Log("  --vtil-out <file>       VTIL serialization path (default: executable directory){RESET}\n");
         Logger::Log("  --max-insns <n>         Stop DriverEntry after n instructions and report RIP{RESET}\n");
+        Logger::Log("  --profile <name|build>  Select a built-in Windows build profile{RESET}\n");
+        Logger::Log("  --profile-json <file>  Load a validated build-profile override{RESET}\n");
         Logger::Log("  --selftest              Run the ke_* semantics self-test and exit (no driver){RESET}\n");
+        Logger::Log("  --module <path>          Map an additional companion kernel module{RESET}\n");
     };
 
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
@@ -275,12 +293,6 @@ int main(int Argc, char* Argv[]) {
 
     Logger::Log("{GRN}Initialized.{RESET}");
 
-    Environment::InitializeSystemModules();
-    ntoskrnl_provider::Initialize();
-    ntoskrnl_export::Initialize();
-
-    UnicornEmu::PatchSystemModuleExports();
-    UnicornEmu::BuildSysModFuncCache();
 
     Logger::Log("{CYN}Loading driver module{RESET}\n");
 
@@ -292,6 +304,7 @@ int main(int Argc, char* Argv[]) {
     std::string ClientScript;
     int ClientDelay = 120;
 
+    std::vector<std::string> AdditionalModules;
     for (int I = 1; I < Argc; I++) {
         std::string Arg = Argv[I];
         if (Arg.rfind("--", 0) == 0) {
@@ -301,6 +314,14 @@ int main(int Argc, char* Argv[]) {
             } else if (Arg == "--diag") {
                 UnicornEmu::DiagnosticHooksEnabled = true;
                 Logger::Log("{YEL}Diagnostic hooks ENABLED (slow mode){RESET}\n");
+            } else if (Arg.rfind("--module", 0) == 0) {
+                std::string Val = (Arg.size() > 8 && Arg[8] == '=')
+                    ? Arg.substr(9) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--module requires a module path{RESET}\n");
+                    return 1;
+                }
+                AdditionalModules.push_back(std::move(Val));
             } else if (Arg == "--no-seh") {
                 UnicornEmu::SehDispatchEnabled = false;
                 Logger::Log("{YEL}SEH dispatch DISABLED{RESET}\n");
@@ -310,6 +331,41 @@ int main(int Argc, char* Argv[]) {
             } else if (Arg == "--intel") {
                 UnicornEmu::IntelCpuSpoofEnabled = true;
                 Logger::Log("{CYN}--intel is a no-op: coherent Intel CPU profile is always active{RESET}\n");
+            } else if (Arg.rfind("--profile-json", 0) == 0) {
+                std::string Val = (Arg.size() > 14 && Arg[14] == '=')
+                    ? Arg.substr(15) : (I + 1 < Argc ? Argv[++I] : "");
+                std::ifstream ProfileFile(Val, std::ios::binary);
+                if (!ProfileFile) {
+                    Logger::Log("{RED}--profile-json cannot open %s{RESET}\n", Val.c_str());
+                    return 1;
+                }
+                std::string Json((std::istreambuf_iterator<char>(ProfileFile)),
+                    std::istreambuf_iterator<char>());
+                Kevlar::Profile::ValidationResult Validation;
+                if (!Kevlar::Profile::ActivateOverride(Json, &Validation)) {
+                    for (const auto& Diagnostic : Validation.Diagnostics) {
+                        Logger::Log("{RED}Profile %s: %s{RESET}\n",
+                            Diagnostic.Path.c_str(), Diagnostic.Message.c_str());
+                    }
+                    return 1;
+                }
+            } else if (Arg.rfind("--profile", 0) == 0) {
+                std::string Val = (Arg.size() > 9 && Arg[9] == '=')
+                    ? Arg.substr(10) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--profile requires a name or build number{RESET}\n");
+                    return 1;
+                }
+                char* End = nullptr;
+                unsigned long Build = strtoul(Val.c_str(), &End, 0);
+                Kevlar::Profile::ValidationResult Validation;
+                bool Activated = (End && *End == '\\0')
+                    ? Kevlar::Profile::ActivateBuild((uint32_t)Build, &Validation)
+                    : Kevlar::Profile::ActivateName(Val, &Validation);
+                if (!Activated) {
+                    Logger::Log("{RED}Unknown or invalid profile: %s{RESET}\n", Val.c_str());
+                    return 1;
+                }
             } else if (Arg.rfind("--seed", 0) == 0) {
                 std::string Val = (Arg.size() > 6 && Arg[6] == '=')
                     ? Arg.substr(7) : (I + 1 < Argc ? Argv[++I] : "");
@@ -389,6 +445,8 @@ int main(int Argc, char* Argv[]) {
                     return 1;
                 }
                 ClientScript = std::move(Val);
+            } else if (Arg == "--target-compat") {
+                TargetCompatEnabled = true;
             } else if (Arg == "--no-pause") {
                 NoPause = true;
             } else if (Arg == "--workers-deep") {
@@ -396,6 +454,10 @@ int main(int Argc, char* Argv[]) {
                 Logger::Log("{CYN}Worker deep-mode: extended emulation loop for worker threads{RESET}\n");
             } else if (Arg == "--eac-service-emu") {
                 EacServiceEmu = true;
+            } else if (Arg == "--no-target-compat") {
+                TargetCompatEnabled = false;
+            } else if (Arg == "--inject-hypervideo") {
+                UnicornEmu::HyperVideoInjectionEnabled = true;
             } else if (Arg.rfind("--max-insns", 0) == 0) {
                 std::string Val = (Arg.size() > 11 && Arg[11] == '=')
                     ? Arg.substr(12) : (I + 1 < Argc ? Argv[++I] : "");
@@ -432,6 +494,48 @@ int main(int Argc, char* Argv[]) {
             }
         }
     }
+    if (!DriverPath.empty()
+        && _stricmp(std::filesystem::path(DriverPath).filename().string().c_str(),
+            "FACEIT_AC.sys") == 0) {
+        const std::string Companion = "C:\\Windows\\System32\\drivers\\FACEIT_IOMMU.sys";
+        if (std::filesystem::exists(Companion)
+            && std::find(AdditionalModules.begin(), AdditionalModules.end(), Companion)
+                == AdditionalModules.end()) {
+            AdditionalModules.push_back(Companion);
+        }
+    }
+    Logger::Log("{CYN}Build profile: %s build=%u fingerprint=%s{RESET}\n",
+        Kevlar::Profile::Active().Name.c_str(),
+        Kevlar::Profile::Active().BuildNumber,
+        Kevlar::Profile::FingerprintHex(Kevlar::Profile::Active()).c_str());
+    UnicornEmu::InitTimingSpoofing();
+    Kevlar::Hardware::ResetActiveHardware(TimingSeed, 0);
+    Kevlar::Memory::ResetGuestMemory(TimingSeed);
+
+    auto ContractCatalog = std::filesystem::path(KevlarGlobal::ExeDir)
+        .parent_path().parent_path().parent_path() / "generated" / "export_contracts_26200.json";
+    auto ContractLoad = Kevlar::Host::Contracts::LoadActiveCatalog(ContractCatalog);
+    if (!ContractLoad.Ok()) {
+        Logger::Log("{RED}Failed to load export contracts: %s (%zu diagnostic(s)){RESET}\n",
+            ContractCatalog.string().c_str(), ContractLoad.Diagnostics.size());
+        return 1;
+    }
+    Logger::Log("{CYN}Loaded %zu export contracts from %s{RESET}\n",
+        ContractLoad.ContractsAdded, ContractCatalog.string().c_str());
+
+    Environment::InitializeSystemModules();
+    ntoskrnl_provider::Initialize();
+    for (const auto& ModulePath : AdditionalModules) {
+        if (!Environment::AddModuleFromFile(ModulePath, L"")) {
+            Logger::Log("{RED}Failed to map companion module: %s{RESET}\n", ModulePath.c_str());
+            return 1;
+        }
+    }
+    ntoskrnl_export::Initialize();
+    usermode_provider::Initialize();
+
+    UnicornEmu::PatchSystemModuleExports();
+    UnicornEmu::BuildSysModFuncCache();
 
     if (SelfTest) {
         int SelfResult = RunSelfTest();
@@ -466,6 +570,14 @@ int main(int Argc, char* Argv[]) {
     }
     Logger::Log("{GRN}File opened. {GRY}MappedBase={WHT}0x%llx {GRY}VirtSize={WHT}0x%llx {GRY}EP={WHT}0x%llx{RESET}\n",
         MainModule->GetMappedImageBase(), MainModule->GetVirtualSize(), MainModule->GetEP());
+    const bool DllMainMode = MainModule->IsDll()
+        && MainModule->GetSubsystem() != IMAGE_SUBSYSTEM_NATIVE;
+    const bool FaceitTarget = _stricmp(
+        std::filesystem::path(DriverPath).filename().string().c_str(),
+        "FACEIT_AC.sys") == 0;
+    if (DllMainMode) {
+        Logger::Log("{YEL}PE mode: user-mode DLL; invoking DllMain(HINSTANCE, DLL_PROCESS_ATTACH, nullptr){RESET}\n");
+    }
     if (VtilRequested) {
         if (VtilOutputPath.empty()) {
             char FileName[64];
@@ -608,6 +720,10 @@ int main(int Argc, char* Argv[]) {
     UnicornEmu::MapKuserSharedData();
 
     UnicornEmu::InstallWatchpoints(UnicornEmu::PrimaryEngine);
+    if (FaceitTarget && TargetCompatEnabled) {
+        TargetCompat::InstallFaceitAc20260908(
+            UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());
+    }
 
     if (!UnicornEmu::TraceRecordPath.empty() || !UnicornEmu::TraceCheckPath.empty() || UnicornEmu::ProvenanceEnabled) {
         UnicornEmu::InstallTraceCapture(UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());
@@ -726,14 +842,47 @@ int main(int Argc, char* Argv[]) {
         if (EacSd) LocalFree(EacSd);
     }
 
-    Logger::Log("{CYN}Starting DriverEntry at RVA {WHT}0x%llx{RESET}\n", MainModule->GetEP());
+    Logger::Log("{CYN}Starting %s at RVA {WHT}0x%llx{RESET}\n",
+        DllMainMode ? "DllMain" : "DriverEntry", MainModule->GetEP());
 
-    bool Result = UnicornEmu::StartEmulation(UnicornEmu::PrimaryEngine, DRIVER_BASE_UC + MainModule->GetEP());
+    bool Result = UnicornEmu::StartEmulation(
+        UnicornEmu::PrimaryEngine, DRIVER_BASE_UC + MainModule->GetEP(), DllMainMode);
 
+
+    {
+        auto GuestDriver = reinterpret_cast<_DRIVER_OBJECT*>(
+            UnicornMem::UcToHost(DRIVER_OBJ_BASE_UC));
+        size_t DispatchCount = 0;
+        uint64_t AddDevice = 0;
+        uint64_t Unload = 0;
+        uint64_t DeviceObject = 0;
+        if (GuestDriver) {
+            for (const auto Routine : GuestDriver->MajorFunction) {
+                if (Routine) ++DispatchCount;
+            }
+            Unload = reinterpret_cast<uint64_t>(GuestDriver->DriverUnload);
+            DeviceObject = reinterpret_cast<uint64_t>(GuestDriver->DeviceObject);
+            if (GuestDriver->DriverExtension) {
+                auto Extension = reinterpret_cast<_DRIVER_EXTENSION*>(
+                    UnicornMem::UcToHost(reinterpret_cast<uint64_t>(GuestDriver->DriverExtension)));
+                if (Extension)
+                    AddDevice = reinterpret_cast<uint64_t>(Extension->AddDevice);
+            }
+        }
+        Logger::Log("{CYN}[LIFECYCLE] add_device=0x%llx unload=0x%llx device=0x%llx dispatch=%zu tracked_devices=%zu ps=%zu/%zu/%zu ob=%zu cm=%zu flt=%zu{RESET}\n",
+            AddDevice, Unload, DeviceObject, DispatchCount, DeviceTracker::GetCount(),
+            PsCallbacks::ProcessCallbackCount(), PsCallbacks::ThreadCallbackCount(),
+            PsCallbacks::ImageCallbackCount(), ObCallbacks::RegisteredCount(),
+            CmCallbacks::RegisteredCount(), FltCallbacks::RegisteredCount());
+    }
     if (Result)
-        Logger::Log("{GRN}DriverEntry completed successfully{RESET}\n");
+        Logger::Log(DllMainMode
+            ? "{GRN}DllMain completed successfully{RESET}\n"
+            : "{GRN}DriverEntry completed successfully{RESET}\n");
     else
-        Logger::Log("{RED}DriverEntry failed or was stopped{RESET}\n");
+        Logger::Log(DllMainMode
+            ? "{RED}DllMain failed or was stopped{RESET}\n"
+            : "{RED}DriverEntry failed or was stopped{RESET}\n");
 
     if (!ClientScript.empty()) {
         std::string ScriptCopy = ClientScript;

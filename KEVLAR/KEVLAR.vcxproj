@@ -192,6 +192,7 @@
     <ClCompile Include="core\exec\insn_crypto.cpp" />
     <ClCompile Include="core\exec\insn_avx.cpp" />
     <ClCompile Include="core\exec\insn_avx_ext.cpp" />
+    <ClCompile Include="core\exec\target_compat.cpp" />
     <ClCompile Include="core\exception\seh_dispatch.cpp" />
     <ClCompile Include="core\diagnostics\diag_center.cpp" />
     <ClCompile Include="core\devirt\vtil_analysis.cpp" />
@@ -199,11 +200,26 @@
     <ClCompile Include="core\io\irp_ioctl.cpp" />
     <ClCompile Include="core\io\irp_readwrite.cpp" />
     <ClCompile Include="core\io\usermode_client.cpp" />
+    <ClCompile Include="core\io\irp_lifecycle.cpp" />
     <ClCompile Include="core\loader\environment.cpp" />
     <ClCompile Include="core\loader\kernel_structs.cpp" />
     <ClCompile Include="core\memory\unicorn_memory.cpp" />
+    <ClCompile Include="core\memory\physical_memory.cpp" />
+    <ClCompile Include="core\memory\virtual_address_space.cpp" />
+    <ClCompile Include="core\memory\guest_memory_runtime.cpp" />
     <ClCompile Include="core\object\handle_manager.cpp" />
     <ClCompile Include="core\process\unicorn_threading.cpp" />
+    <ClCompile Include="core\profile\windows_build_profile.cpp" />
+    <ClCompile Include="core\profile\active_profile.cpp" />
+    <ClCompile Include="core\scheduler\virtual_scheduler.cpp" />
+    <ClCompile Include="core\hardware\pci_bus.cpp" />
+    <ClCompile Include="core\hardware\iommu.cpp" />
+    <ClCompile Include="core\hardware\hardware_profile.cpp" />
+    <ClCompile Include="core\hardware\hardware_runtime.cpp" />
+    <ClCompile Include="core\lifecycle\driver_lifecycle.cpp" />
+    <ClCompile Include="core\snapshot\emulator_snapshot.cpp" />
+    <ClCompile Include="core\coverage\edge_coverage.cpp" />
+    <ClCompile Include="core\fuzz\io_fuzzer.cpp" />
     <ClCompile Include="core\registry\virtual_fs.cpp" />
     <ClCompile Include="core\debug\dbg_print.cpp" />
     <ClCompile Include="core\debug\dbg_misc.cpp" />
@@ -234,10 +250,19 @@
     <ClCompile Include="api\rtl\rtl_misc.cpp" />
     <ClCompile Include="api\rtl\rtl_registry.cpp" />
     <ClCompile Include="api\rtl\crt_string.cpp" />
+    <ClCompile Include="api\rtl\rtl_hash.cpp" />
     <ClCompile Include="host\main\kevlar.cpp" />
     <ClCompile Include="host\providers\provider.cpp" />
     <ClCompile Include="host\providers\ntoskrnl_provider.cpp" />
     <ClCompile Include="host\providers\static_export_provider.cpp" />
+    <ClCompile Include="host\providers\usermode_provider.cpp" />
+    <ClCompile Include="host\providers\export_contracts.cpp" />
+    <ClCompile Include="host\providers\export_contract_runtime.cpp" />
+    <ClCompile Include="host\frameworks\framework_provider.cpp" />
+    <ClCompile Include="host\frameworks\kmdf_provider.cpp" />
+    <ClCompile Include="host\frameworks\fltmgr_provider.cpp" />
+    <ClCompile Include="host\frameworks\ndis_provider.cpp" />
+    <ClCompile Include="host\frameworks\storport_provider.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config.h" />
@@ -247,6 +272,7 @@
     <ClInclude Include="core\exec\insn_emulator_internal.h" />
     <ClInclude Include="core\exec\timing_spoof.h" />
     <ClInclude Include="core\exec\cpu_profile.h" />
+    <ClInclude Include="core\exec\target_compat.h" />
     <ClInclude Include="core\exception\seh_dispatch.h" />
     <ClInclude Include="core\devirt\vtil_analysis.h" />
     <ClInclude Include="core\diagnostics\diag_center.h" />
@@ -255,8 +281,22 @@
     <ClInclude Include="core\loader\environment.h" />
     <ClInclude Include="core\loader\kernel_structs.h" />
     <ClInclude Include="core\memory\unicorn_memory.h" />
+    <ClInclude Include="core\memory\physical_memory.h" />
+    <ClInclude Include="core\memory\virtual_address_space.h" />
+    <ClInclude Include="core\memory\guest_memory_runtime.h" />
     <ClInclude Include="core\object\handle_manager.h" />
     <ClInclude Include="core\process\unicorn_threading.h" />
+    <ClInclude Include="core\profile\windows_build_profile.h" />
+    <ClInclude Include="core\profile\active_profile.h" />
+    <ClInclude Include="core\scheduler\virtual_scheduler.h" />
+    <ClInclude Include="core\hardware\pci_bus.h" />
+    <ClInclude Include="core\hardware\iommu.h" />
+    <ClInclude Include="core\hardware\hardware_profile.h" />
+    <ClInclude Include="core\hardware\hardware_runtime.h" />
+    <ClInclude Include="core\lifecycle\driver_lifecycle.h" />
+    <ClInclude Include="core\snapshot\emulator_snapshot.h" />
+    <ClInclude Include="core\coverage\edge_coverage.h" />
+    <ClInclude Include="core\fuzz\io_fuzzer.h" />
     <ClInclude Include="core\registry\virtual_fs.h" />
     <ClInclude Include="core\debug\dbg_print.h" />
     <ClInclude Include="core\debug\dbg_misc.h" />
@@ -288,6 +328,7 @@
     <ClInclude Include="api\rtl\rtl_misc.h" />
     <ClInclude Include="api\rtl\rtl_registry.h" />
     <ClInclude Include="api\rtl\crt_string.h" />
+    <ClInclude Include="api\rtl\rtl_hash.h" />
     <ClInclude Include="include\common.h" />
     <ClInclude Include="include\nt_define.h" />
     <ClInclude Include="include\ntoskrnl_struct.h" />
@@ -296,6 +337,14 @@
     <ClInclude Include="host\providers\provider.h" />
     <ClInclude Include="host\providers\ntoskrnl_provider.h" />
     <ClInclude Include="host\providers\static_export_provider.h" />
+    <ClInclude Include="host\providers\usermode_provider.h" />
+    <ClInclude Include="host\providers\export_contracts.h" />
+    <ClInclude Include="host\providers\export_contract_runtime.h" />
+    <ClInclude Include="host\frameworks\framework_provider.h" />
+    <ClInclude Include="host\frameworks\kmdf_provider.h" />
+    <ClInclude Include="host\frameworks\fltmgr_provider.h" />
+    <ClInclude Include="host\frameworks\ndis_provider.h" />
+    <ClInclude Include="host\frameworks\storport_provider.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="inline_assembly.asm" />
