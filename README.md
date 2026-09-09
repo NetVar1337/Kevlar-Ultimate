@@ -4,14 +4,14 @@
 
 ### Kernel Export Virtualization Layer And Runtime
 
-**An x64 Windows kernel-driver emulation and behavior-analysis harness powered by Unicorn.**
+**An x64 Windows kernel-driver emulation and behavior-analysis harness powered by Unicorn — with a local MCP server for agent-driven builds and runs.**
 
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](#requirements)
 [![Language](https://img.shields.io/badge/C%2B%2B-20-00599C?style=for-the-badge&logo=cplusplus&logoColor=white)](#build)
 [![Engine](https://img.shields.io/badge/engine-Unicorn-7B2CBF?style=for-the-badge)](https://www.unicorn-engine.org/)
-[![Build](https://img.shields.io/badge/build-Debug%20%7C%20Release-2EA44F?style=for-the-badge)](#build)
+[![MCP](https://img.shields.io/badge/MCP-server%20included-8A2BE2?style=for-the-badge)](#mcp-server)
 
-[Overview](#overview) • [Architecture](#architecture) • [Build](#build) • [Usage](#usage) • [Compatibility](#compatibility) • [Roadmap](#roadmap)
+[Overview](#overview) • [Architecture](#architecture) • [Build](#build) • [Usage](#usage) • [MCP](#mcp-server) • [Compatibility](#compatibility) • [Limitations](#known-limitations)
 
 </div>
 
@@ -19,7 +19,7 @@
 
 ## Overview
 
-KEVLAR maps a 64-bit Windows kernel driver into a synthetic kernel address space, resolves its imports into host implementations or controlled stubs, builds the minimum kernel environment it needs, and executes `DriverEntry` inside Unicorn—without loading the target driver into the live Windows kernel.
+KEVLAR maps a 64-bit Windows kernel driver into a synthetic kernel address space, resolves its imports into host implementations or controlled stubs, builds the minimum kernel environment it needs, and executes `DriverEntry` inside Unicorn — without loading the target driver into the live Windows kernel.
 
 It is designed for driver behavior research, execution tracing, environment-probe analysis, and iterative reconstruction of missing kernel semantics.
 
@@ -74,6 +74,7 @@ flowchart LR
 - **Desktop development with C++** workload
 - Windows 10/11 SDK
 - PowerShell 5.1 or newer
+- Python 3.11+ (only for the MCP server)
 
 Dependencies are pinned through `vcpkg.json`:
 
@@ -127,15 +128,24 @@ Enable focused diagnostics:
 | `--modreads` | Trace reads from mapped system modules |
 | `--no-seh` | Disable synthetic SEH dispatch |
 | `--intel` | Accepted for compatibility; the coherent Intel profile is always active |
+| `--profile <name>` | Select a named hardware/platform profile |
+| `--profile-json <file>` | Load a custom platform profile from JSON |
 | `--seed <n>` | Deterministic seed for TSC jitter (default is fixed) |
-| `--vgk-override` | Convert the configured VGK access-denied result to success |
-| `--devirt` | Enable devirtualization-testing behavior |
+| `--max-insns <n>` | Hard instruction budget for the run |
 | `--strict-exports` | Unhandled exports return `STATUS_NOT_IMPLEMENTED` instead of `0` |
+| `--devirt` | Enable devirtualization-testing behavior |
 | `--provenance` | Trace branch decisions + API results for early rejection paths |
 | `--trace <file>` | Record a deterministic execution trace |
 | `--check <file>` | Replay a trace; report the first divergence |
-| `--no-pause` | Skip the final pause; exit ~5s after a no-thread run (automation) |
+| `--vgk-override` | Convert the configured VGK access-denied result to success |
+| `--workers-deep` | Deep synthetic worker-thread expansion |
+| `--eac-service-emu` | Enable EAC service-path emulation |
+| `--inject-hypervideo` | Inject the `hypervideo.sys` surface into the module list |
+| `--target-compat` / `--no-target-compat` | Control exact-version target-compat status normalization |
+| `--client <file>` / `--client-delay <ms>` | Drive a usermode IOCTL client against the emulated driver |
+| `--module <name>=<file>` | Substitute a real system module image |
 | `--selftest` | Run the IRQL/APC/DPC/timer self-test and exit (no driver needed) |
+| `--no-pause` | Skip the final pause; exit ~5s after a no-thread run (automation) |
 
 ### Runtime layout
 
@@ -152,6 +162,57 @@ builds/Release/
     └── vreg/
 ```
 
+## MCP server
+
+`mcp/kevlar_mcp` ships a local stdio [Model Context Protocol](https://modelcontextprotocol.io) server that wraps building, driver execution, self-testing, and run inspection behind bounded, auditable tools. Every long operation becomes a **persistent run** — identified by a run ID, logged to disk under `builds/mcp-runs/`, and readable/cancellable later, even after the server restarts.
+
+### Install
+
+```powershell
+python -m pip install -e .\mcp
+```
+
+### Register with Claude Code
+
+```powershell
+claude mcp add kevlar -- python -m kevlar_mcp
+```
+
+Or add the equivalent entry to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "kevlar": {
+      "command": "python",
+      "args": ["-m", "kevlar_mcp"],
+      "cwd": "C:\\path\\to\\Kevlar-Ultimate"
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Purpose |
+|---|---|
+| `inspect_driver` | PE header/section inspection of an allowlisted `.sys` through a server-staged copy (SHA-256, machine, sections, entry point) |
+| `build_kevlar` | Start a bounded Debug or Release build via `build.ps1`; returns a run record |
+| `run_driver` | Execute one staged driver with bounded time/instructions and the full switch surface |
+| `run_selftest` | Run KEVLAR's built-in host-semantics self-test |
+| `generate_test_driver` | Emit a minimal test `.sys` through the repository's fixed generator |
+| `read_run_log` | Read a bounded UTF-8 chunk of a run's log at an offset |
+| `list_runs` | List recent runs, optionally filtered by status |
+| `cancel_run` | Kill an active process tree by run ID; completed runs are untouched |
+
+### Safety model
+
+- **Path confinement** — inputs resolve only under the Kevlar project root, `C:\Program Files\Alea`, or `C:\Program Files\FACEIT AC`; opened handles are re-verified via `GetFinalPathNameByHandle` to defeat junction/symlink escapes. Generated outputs (`.sys`, `.trace`) are server-owned files under `builds/mcp-runs/`.
+- **Bounded execution** — per-run timeout (≤1 h), output cap (≤4 MiB), instruction cap (≤1e9), and at most 4 concurrent subprocesses. Overruns are killed via `taskkill /T /F` with explicit `timed_out` / `termination_failed` statuses.
+- **Strict schemas** — every request/response is a Pydantic model with `extra="forbid"`; unknown tool arguments are rejected at the protocol envelope, not silently ignored.
+- **Crash hygiene** — a server restart marks runs that were mid-flight as `interrupted` instead of leaving them as phantom `running` records.
+- **Honest statuses** — `analysis_only` is reported for `--target-compat` runs; target-compat status normalization never claims complete emulation (`emulation_complete` stays false unless the driver's own lifecycle markers say otherwise).
+
 ## Compatibility
 
 Compatibility is path- and version-specific. Results beyond `DriverEntry` depend on the APIs and kernel behavior exercised by each driver.
@@ -166,24 +227,7 @@ Compatibility is path- and version-specific. Results beyond `DriverEntry` depend
 
 ### Current FACEIT baseline
 
-Before compatibility work, the locally tested FACEIT drivers both reached their entry points and returned the same vendor-specific failure:
-
-| Driver | SHA-256 | Result |
-|---|---|---|
-| `FACEIT_AC.sys` | `8b26feff7fc5f75b5eaad42e99b4d9c5b6cd779c408e5d882b5549e6de15b6d9` | `DriverEntry → 0xC0EB0001` |
-| `FACEIT_IOMMU.sys` | `86f93b3b6d899ec7cd3250866fe22251b875a4de2965da642e0a4f2e2ac91f39` | `DriverEntry → 0xC0EB0001` |
-
-A captured `FACEIT_IOMMU.sys` trace (`builds/Release/faceit-iommu-run.log`) shows the
-rejection follows the driver's early platform checks: an `InitSafeBootMode` read (0),
-then `CPUID` leaf `0x1` and the hypervisor leaf `0x40000000`. Under the older, host-
-passthrough profile that trace exposed the host's own CPUID (`ECX=0xfffaf38b`, hypervisor
-bit set) and a `Microsoft Hv` hypervisor leaf. The coherent CPU profile now presents a
-bare-metal surface for exactly those reads — leaf `0x1` `ECX=0x7FFAB7FF` (bit 31 clear),
-`0x40000000` empty — verified by the CPUID probe in the smoke driver
-(`make_test_driver.py`, logged under `--diag`). The bounded ACPI/PCI/IOMMU model and the
-VT-d advertisement in the CPUID/MSR surface back the IOMMU path. Re-running a fresh
-`FACEIT_IOMMU.sys` against the current build is still required to confirm the next
-rejection point; no FACEIT compatibility claim is made yet.
+The locally tested FACEIT drivers (`FACEIT_AC.sys`, `FACEIT_IOMMU.sys`) both reach their entry points and return the same vendor-specific failure, `0xC0EB0001`, after early platform checks: an `InitSafeBootMode` read (0), then `CPUID` leaf `0x1` and hypervisor leaf `0x40000000`. The coherent CPU profile now presents a bare-metal surface for exactly those reads — leaf `0x1` `ECX=0x7FFAB7FF` (hypervisor bit clear), `0x40000000` empty — verified by the CPUID probe in the smoke driver. The bounded ACPI/PCI/IOMMU model and VT-d advertisement in the CPUID/MSR surface back the IOMMU path. A fresh `FACEIT_IOMMU.sys` run against the current build is still required to confirm the next rejection point; **no FACEIT compatibility claim is made yet.**
 
 ## Project layout
 
@@ -205,58 +249,14 @@ KEVLAR/
 
 libs/                      # Logger, PE mapper and symbol parser
 extern/                    # Vendored public headers
+mcp/kevlar_mcp/            # Local stdio MCP server (Python)
 vcpkg-ports/               # Reproducible dependency overlay
 tests/                     # Smoke test driver generator + runner
 tools/pdb_layout/          # DIA-based kernel structure layout generator
 generated/                 # Generated layout headers (pdb_layout output)
 ```
 
-## Roadmap
-
-- [x] Replace independent CPUID mutations with coherent platform profiles
-- [x] Add branch and value-provenance tracing for early rejection paths (`--provenance`)
-- [x] Generate Windows-build-specific kernel structure layouts from PDBs (`tools/pdb_layout`)
-- [x] Add strict handling for unknown exports instead of ambiguous zero returns (`--strict-exports`)
-- [x] Expand scheduler, IRQL, APC, DPC, timer and synchronization semantics
-- [x] Model ACPI, PCI and IOMMU state for IOMMU-oriented drivers
-- [x] Add deterministic trace replay and differential validation (`--trace` / `--check`)
-- [x] Add automated smoke tests for PE mapping and emulator initialization (`tests/smoke.ps1`)
-- [x] Fix import-resolution crash and harden PE export/import parsing (`ParseExport` bounds, `GetExport` lookups, null-safe `ResolveImport`)
-- [x] Consume PDB-generated kernel layouts in the harness (`kernel_layout_consume.h`: `GEN_*` fixed-offset accesses, PDB-accurate ETHREAD via KTHREAD padding, drift `static_assert`s)
-- [x] Advertise VT-d/VT-x pre-conditions coherently in the CPUID/MSR surface (`IA32_FEATURE_CONTROL` VMX-enabled, valid `IA32_VMX_BASIC`, sane IOMMU `CAP.ND`)
-- [x] Deliver kernel APCs on the target thread's context, waking wait-blocked threads (per-thread wake events, inline `KernelRoutine`/`NormalRoutine`)
-- [x] Validate the FACEIT CPUID rejection surface against the captured `FACEIT_IOMMU` trace: the coherent profile presents the bare-metal leaf `0x1` / empty `0x40000000` the driver checks (smoke-driver CPUID probe)
-
-### Scheduler / IRQL / APC / DPC / timer / sync expansion
-
-- Guest-visible IRQL is tracked in `KPCR.Irql` (offset `0x50`): `KeGetCurrentIrql`,
-  `KfRaiseIrql`/`KeRaiseIrql` (return old), `KeLowerIrql`/`KfLowerIrql`,
-  `KeRaiseIrqlToDpcLevel`. Spinlock acquire raises to `DISPATCH_LEVEL` and
-  `KeReleaseSpinLock(lock, NewIrql)` restores it.
-- Kernel APCs are queued per-thread (`KeInsertQueueApc` / `KeRemoveQueueApc`) and
-  delivered at waits, `KeTestAlertThread`, `KeAlertThread` and self-targeted inserts;
-  `KeEnter/LeaveCriticalRegion` and `KeAre(ApcsDisabled)` track the thread's `ApcDisable`
-  counter. Kernel-APC `NormalRoutine` runs on a delivery thread (not the target's
-  context) — see limitations.
-- `KeInitializeDpc` now stores the deferred routine/context (it previously zeroed the
-  object); `KeInsertQueueDpc` / `KeRemoveQueueDpc` run queued DPCs on a host worker.
-- Timers support cancellation (`KeCancelTimer` actually prevents the DPC from firing)
-  and periodic re-arm (`KeSetTimerEx` honours `Period`).
-
-### ACPI / PCI / IOMMU (bounded baseline)
-
-- `HalGetBusDataByOffset` returns a synthetic PCI config space (host bridge + a VT-d
-  IOMMU device).
-- `HalAcpiGetTableEx` returns a guest-resident, checksum-correct VT-d `DMAR` table
-  describing one remapping unit at `0xFED90000`.
-- `MmMapIoSpaceEx` on `0xFED90000` maps a coherent VT-d register block (version,
-  capability, status) so `READ_REGISTER_*` against the IOMMU does not fault.
-
-This model is shaped from the general shape of IOMMU-oriented drivers, not from a
-captured trace of an actual target. Re-validate it against a real trace (e.g. a fresh
-`FACEIT_IOMMU.sys` run) before relying on it for a specific driver.
-
-### Smoke tests and layout generation
+## Smoke tests and layout generation
 
 Automated smoke tests cover PE mapping and emulator initialization end-to-end:
 
@@ -265,12 +265,7 @@ Automated smoke tests cover PE mapping and emulator initialization end-to-end:
 .\tests\smoke.ps1 -SkipBuild      # reuse an existing build
 ```
 
-`tests\make_test_driver.py` emits a minimal x64 native driver (no imports, a KPCR/GS read,
-a conditional branch) that must return `STATUS_SUCCESS` for the test to pass. It first runs
-the FACEIT-style CPUID probe (leaf `0x1` + `0x40000000`) so `--diag` runs show the coherent
-bare-metal profile values. `--with-import` adds a single `ntoskrnl.exe!KeInitializeSpinLock`
-import so the full import-resolution path (`ParseExport` on ntoskrnl, `ResolveImport`,
-`BuildSentinelIat`) is exercised end-to-end.
+`tests\make_test_driver.py` emits a minimal x64 native driver (no imports, a KPCR/GS read, a conditional branch) that must return `STATUS_SUCCESS` for the test to pass. It first runs the FACEIT-style CPUID probe (leaf `0x1` + `0x40000000`) so `--diag` runs show the coherent bare-metal profile values. `--with-import` adds a single `ntoskrnl.exe!KeInitializeSpinLock` import so the full import-resolution path (`ParseExport` on ntoskrnl, `ResolveImport`, `BuildSentinelIat`) is exercised end-to-end.
 
 Structure layouts for the actual target ntoskrnl PDB are generated with the DIA SDK:
 
@@ -278,52 +273,22 @@ Structure layouts for the actual target ntoskrnl PDB are generated with the DIA 
 .\tools\pdb_layout.ps1            # -> generated\kernel_layout.h (GEN_<STRUCT>_<FIELD> defines)
 ```
 
-The harness consumes these generated offsets through `KEVLAR\include\kernel_layout_consume.h`:
-fixed-offset accesses (KPCR→KPRCB→CurrentThread, ETHREAD→KTHREAD back-pointers, EPROCESS
-rundown-protect, APC-disable) are sourced from the `GEN_*` macros, the synthetic ETHREAD
-layout is kept at the PDB size (KTHREAD tail padding in `ntoskrnl_struct.h`), and
-compile-time `static_assert`s fail the build if a hardcoded struct drifts from the
-generated offsets. Regenerate `generated\kernel_layout.h` after refreshing the target
-ntoskrnl PDB and rebuild.
-
-Remaining structural gap: the hardcoded `_KPROCESS`/`_EPROCESS` bodies predate the target
-build (e.g. `UniqueProcessId` at `0x440` vs `0x1D0` on 26100), so EPROCESS fields other
-than the ones the harness populates through the `GEN_` accessors are not PDB-accurate. The
-harness's providers are self-consistent on those paths; direct driver probing of
-non-populated EPROCESS fields is the known limit. Full accuracy needs `pdb_layout` to
-emit typed struct definitions rather than offsets.
+The harness consumes these generated offsets through `KEVLAR\include\kernel_layout_consume.h`: fixed-offset accesses (KPCR→KPRCB→CurrentThread, ETHREAD→KTHREAD back-pointers, EPROCESS rundown-protect, APC-disable) are sourced from the `GEN_*` macros, the synthetic ETHREAD layout is kept at the PDB size (KTHREAD tail padding in `ntoskrnl_struct.h`), and compile-time `static_assert`s fail the build if a hardcoded struct drifts from the generated offsets. Regenerate `generated\kernel_layout.h` after refreshing the target ntoskrnl PDB and rebuild.
 
 ## Known limitations
 
-- The included kernel structure definitions are based primarily on Windows 10 21H2 x64, with
-  the harness-consumed offsets (ETHREAD/KTHREAD/KPCR/KPRCB and the fixed-offset accesses)
-  tracked against the generated layout from the cached ntoskrnl PDB.
-- Many kernel exports are simplified or intentionally stubbed.
-- Unknown return values can alter downstream control flow.
+- The included kernel structure definitions are based primarily on Windows 10 21H2 x64, with the harness-consumed offsets (ETHREAD/KTHREAD/KPCR/KPRCB and the fixed-offset accesses) tracked against the generated layout from the cached ntoskrnl PDB. The hardcoded `_KPROCESS`/`_EPROCESS` bodies predate the target build (e.g. `UniqueProcessId` at `0x440` vs `0x1D0` on 26100), so EPROCESS fields other than the ones the harness populates through the `GEN_` accessors are not PDB-accurate; full accuracy needs `pdb_layout` to emit typed struct definitions rather than offsets.
+- Many kernel exports are simplified or intentionally stubbed; unknown return values can alter downstream control flow.
 - Host threads do not perfectly reproduce Windows scheduling and IRQL behavior.
-- Kernel APCs deliver on the target thread's own context: `KernelRoutine`/`NormalRoutine`
-  run inline on the target's engine (current ETHREAD/KPCR/stack are the target's), and a
-  cross-thread APC signals a per-thread wake event so a wait-blocked thread is interrupted
-  and delivers it in its wait loop instead of at an arbitrary future delivery point.
-- The ACPI/PCI/IOMMU model is a bounded baseline: synthetic PCI config, a VT-d `DMAR`
-  table, a coherent `0xFED90000` register block, and a CPUID/MSR surface that advertises
-  the virtualization pre-conditions (`IA32_FEATURE_CONTROL` VMX-enabled, a valid
-  `IA32_VMX_BASIC`). The register set is still minimal until a real IOMMU driver trace
-  validates it.
-- PnP, power, DMA, filter stacks and real device behavior are present but simplified
-  (`IoCreateDevice`, `IoRegisterPlugPlayNotification`, `IofCompleteRequest`, MDL/DMA and
-  contiguous-memory providers exist). They are extended only when a specific target
-  driver is seen exercising a given path.
+- Kernel APCs deliver on the target thread's own context: `KernelRoutine`/`NormalRoutine` run inline on the target's engine (current ETHREAD/KPCR/stack are the target's), and a cross-thread APC signals a per-thread wake event so a wait-blocked thread is interrupted and delivers it in its wait loop instead of at an arbitrary future delivery point.
+- The ACPI/PCI/IOMMU model is a bounded baseline: synthetic PCI config, a VT-d `DMAR` table, a coherent `0xFED90000` register block, and a CPUID/MSR surface that advertises the virtualization pre-conditions (`IA32_FEATURE_CONTROL` VMX-enabled, a valid `IA32_VMX_BASIC`). The register set is still minimal until a real IOMMU driver trace validates it.
+- PnP, power, DMA, filter stacks and real device behavior are present but simplified (`IoCreateDevice`, `IoRegisterPlugPlayNotification`, `IofCompleteRequest`, MDL/DMA and contiguous-memory providers exist). They are extended only when a specific target driver is seen exercising a given path.
 - Diagnostic mode can produce large traces and run substantially slower.
-- Import resolution is fixed: `ParseExport` bounds-checks every export-table read (no more
-  OOB name reads corrupting the export map), `GetExport`/`GetImport` use single lookups, and
-  `ResolveImport` no longer crashes on a missing import module or ordinal thunk. A driver
-  importing from a real cached `ntoskrnl.exe` resolves its IAT through
-  `BuildSentinelIat`; coverage lives in `make_test_driver.py --with-import`.
+- Import resolution is fixed: `ParseExport` bounds-checks every export-table read, `GetExport`/`GetImport` use single lookups, and `ResolveImport` no longer crashes on a missing import module or ordinal thunk. A driver importing from a real cached `ntoskrnl.exe` resolves its IAT through `BuildSentinelIat`; coverage lives in `make_test_driver.py --with-import`.
 
 ## Credits
 
-- **TheRealWaryas** — KACE, which inspired the project’s early development
+- **TheRealWaryas** — KACE, which inspired the project's early development
 - **Unicorn Engine** — CPU emulation
 - **Zydis / Zycore** — x86/x64 instruction decoding and support
 
