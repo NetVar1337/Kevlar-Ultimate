@@ -52,6 +52,10 @@ struct MemoryRegion {
     uint32_t Perms;
 };
 
+// Global helper (defined in core/process/unicorn_threading.cpp): true when the
+// calling host thread currently drives a guest ThreadContext.
+bool TlsHasGuestContext();
+
 namespace UnicornEmu {
 
 extern uc_engine* PrimaryEngine;
@@ -144,6 +148,10 @@ void OnRdtsc(uc_engine* Uc, void* UserData);
 void OnRdmsr(uc_engine* Uc, void* UserData);
 void OnWrmsr(uc_engine* Uc, void* UserData);
 void OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+    void OnDispatchProbe(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+    void OnInstrCount(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+    void OnEacBufferRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr,
+        int Size, int64_t Value, void* UserData);
 void OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnVmStepTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
@@ -175,6 +183,15 @@ extern bool DevirtualizationTest;
 extern bool RdmsrInsnHookSupported;
 extern bool WrmsrInsnHookSupported;
 extern bool MsrCodeInterceptEnabled;
+extern uint64_t DispatchProbeA;
+extern uint64_t DispatchProbeB;
+    extern uint64_t PerThreadTraceStart;
+    extern uint64_t PerThreadTraceEnd;
+    extern uint64_t EacProbeBufferStart;
+    extern uint64_t EacProbeBufferEnd;
+extern bool ProbeEnginesOnly;
+    extern bool WorkersDeepMode;
+    uint64_t GetInstrCount(uc_engine* Uc);
 extern bool StrictExportsEnabled;
 extern bool ProvenanceEnabled;
 extern std::string TraceRecordPath;

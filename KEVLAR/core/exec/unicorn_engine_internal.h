@@ -111,4 +111,4 @@ struct EmulationLoopResult {
     uint64_t CrashRip, CrashRsp, CrashRax, CrashRcx, CrashRdx, CrashR8, CrashR9, CrashRbx;
 };
 
-EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint);
+EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_t InstructionLimit = 0);

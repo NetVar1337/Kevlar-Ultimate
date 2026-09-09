@@ -2528,33 +2528,26 @@ struct _IO_STACK_LOCATION {
         struct {
             VOID* SecurityContext; //0x8
             ULONG Options; //0x10
-            ULONG _CreatePad0; //0x14
-            USHORT FileAttributes; //0x18
-            USHORT ShareAccess; //0x1a
-            ULONG EaLength; //0x1c
+            USHORT FileAttributes; //0x14
+            USHORT ShareAccess; //0x16
+            ULONG EaLength; //0x18
         } Create;
         struct {
             ULONG Length; //0x8
-            ULONG _ReadPad0; //0xc
-            ULONG Key; //0x10
-            ULONG _ReadFlags; //0x14
-            union _LARGE_INTEGER ByteOffset; //0x18
+            ULONG Key; //0xc
+            union _LARGE_INTEGER ByteOffset; //0x10
         } Read;
         struct {
             ULONG Length; //0x8
-            ULONG _WritePad0; //0xc
-            ULONG Key; //0x10
-            ULONG _WriteFlags; //0x14
-            union _LARGE_INTEGER ByteOffset; //0x18
+            ULONG Key; //0xc
+            union _LARGE_INTEGER ByteOffset; //0x10
         } Write;
         struct {
             ULONG OutputBufferLength; //0x8
-            ULONG _IoctlPad0; //0xc
-            ULONG InputBufferLength; //0x10
-            ULONG _IoctlPad1; //0x14
-            ULONG IoControlCode; //0x18
-            ULONG _IoctlPad2; //0x1c
-            VOID* Type3InputBuffer; //0x20
+            ULONG InputBufferLength; //0xc
+            ULONG IoControlCode; //0x10
+            ULONG _IoctlPad0; //0x14 (align pointer)
+            VOID* Type3InputBuffer; //0x18
         } DeviceIoControl;
         struct {
             VOID* Argument1; //0x8
@@ -2569,3 +2562,10 @@ struct _IO_STACK_LOCATION {
     VOID* CompletionRoutine; //0x38
     VOID* Context; //0x40
 };
+
+static_assert(offsetof(_IO_STACK_LOCATION, Parameters.DeviceIoControl.OutputBufferLength) == 0x08);
+static_assert(offsetof(_IO_STACK_LOCATION, Parameters.DeviceIoControl.InputBufferLength) == 0x0C);
+static_assert(offsetof(_IO_STACK_LOCATION, Parameters.DeviceIoControl.IoControlCode) == 0x10);
+static_assert(offsetof(_IO_STACK_LOCATION, Parameters.DeviceIoControl.Type3InputBuffer) == 0x18);
+static_assert(offsetof(_IO_STACK_LOCATION, DeviceObject) == 0x28);
+static_assert(sizeof(_IO_STACK_LOCATION) == 0x48);

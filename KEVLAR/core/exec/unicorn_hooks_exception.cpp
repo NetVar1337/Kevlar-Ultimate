@@ -111,6 +111,10 @@ bool UnicornEmu::Hooks::OnMemReadUnmapped(uc_engine* Uc, uc_mem_type Type, uint6
 
         if (SehDispatch::DispatchException(Uc, STATUS_ACCESS_VIOLATION_EX, Addr)) {
             Logger::Log("{CYN}READ UNMAPPED LOW: SEH accepted fault 0x%llx and resumed control flow{RESET}\n", Addr);
+            if (Addr >= 0x1000 && Addr < 0x10000) {
+                std::lock_guard<std::mutex> MapGuard(UnicornEmu::UcMapLock);
+                uc_mem_map(Uc, Addr & ~0xFFFULL, 0x1000, UC_PROT_ALL);
+            }
             return true;
         }
 
@@ -121,6 +125,15 @@ bool UnicornEmu::Hooks::OnMemReadUnmapped(uc_engine* Uc, uc_mem_type Type, uint6
     if (SehDispatch::DispatchException(Uc, STATUS_ACCESS_VIOLATION_EX, Addr)) {
         if (DiagnosticHooksEnabled)
             Logger::Log("{CYN}READ UNMAPPED: SEH accepted fault at 0x%llx{RESET}\n", Addr);
+        // SEH may resume at the faulting instruction (CONTINUE_EXECUTION) or the
+        // handler may re-touch the address: lazily map a zero page so the retry
+        // succeeds instead of killing the loop with UC_ERR_MAP. Kernel-range
+        // addresses only (host-base module-list reads), to avoid page floods.
+        if (Addr >= 0xFFFFF80000000000ULL) {
+            std::lock_guard<std::mutex> MapGuard(UnicornEmu::UcMapLock);
+            if (uc_mem_map(Uc, PageAddr, 0x1000, UC_PROT_ALL) == UC_ERR_OK && DiagnosticHooksEnabled)
+                Logger::Log("{BLU}READ UNMAPPED: post-SEH lazy zero page at 0x%llx{RESET}\n", PageAddr);
+        }
         return true;
     }
 

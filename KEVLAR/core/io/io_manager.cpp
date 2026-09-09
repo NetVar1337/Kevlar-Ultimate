@@ -93,6 +93,11 @@ uint64_t IoManager::AllocateFileObject(uc_engine* Uc, uint64_t DeviceObjUcAddr) 
     FileObjHost->Type = 5;
     FileObjHost->Size = (SHORT)sizeof(_FILE_OBJECT);
     FileObjHost->DeviceObject = (_DEVICE_OBJECT*)DeviceObjUcAddr;
+    FileObjHost->ReadAccess = TRUE;
+    FileObjHost->WriteAccess = TRUE;
+    FileObjHost->SharedRead = TRUE;
+    FileObjHost->SharedWrite = TRUE;
+    FileObjHost->Flags = 0x20; // FO_SYNCHRONOUS_IO_NONALERT
 
     Logger::Log("{GRN}IoManager::AllocateFileObject UC=0x%llx DevObj=0x%llx{RESET}\n",
         FileObjUcAddr, DeviceObjUcAddr);
@@ -197,7 +202,7 @@ static IoManager::DispatchResult DispatchSimpleIrpSeh(uint64_t DeviceObjUcAddr, 
     Logger::Log("{CYN}IoManager::Dispatch MJ=0x%02x -> 0x%llx DevObj=0x%llx IRP=0x%llx{RESET}\n",
         MajorFunction, DispatchAddr, DeviceObjUcAddr, IrpUcAddr);
 
-    ThreadContext* DispatchThread = UnicornThread::CreateEx(
+    ThreadContext* DispatchThread = UnicornThread::CreateUserEx(
         DispatchAddr,
         DeviceObjUcAddr,
         IrpUcAddr,

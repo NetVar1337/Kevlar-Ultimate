@@ -99,7 +99,7 @@ static IoManager::DispatchResult DispatchWriteSeh(
     Logger::Log("{CYN}IoManager::DispatchWrite -> 0x%llx DevObj=0x%llx IRP=0x%llx Len=%u{RESET}\n",
         DispatchAddr, DeviceObjUcAddr, IrpUcAddr, WriteLength);
 
-    ThreadContext* DispatchThread = UnicornThread::CreateEx(
+    ThreadContext* DispatchThread = UnicornThread::CreateUserEx(
         DispatchAddr,
         DeviceObjUcAddr,
         IrpUcAddr,
@@ -266,7 +266,7 @@ static IoManager::DispatchResult DispatchReadSeh(
     Logger::Log("{CYN}IoManager::DispatchRead -> 0x%llx DevObj=0x%llx IRP=0x%llx Len=%u{RESET}\n",
         DispatchAddr, DeviceObjUcAddr, IrpUcAddr, ReadLength);
 
-    ThreadContext* DispatchThread = UnicornThread::CreateEx(
+    ThreadContext* DispatchThread = UnicornThread::CreateUserEx(
         DispatchAddr,
         DeviceObjUcAddr,
         IrpUcAddr,

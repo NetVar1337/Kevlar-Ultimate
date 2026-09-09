@@ -195,6 +195,7 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("MmGetPhysicalAddress", h_MmGetPhysicalAddress);
     Provider::AddFuncImpl("_vsnwprintf", h__vsnwprintf);
     Provider::AddFuncImpl("ZwOpenSection", h_ZwOpenSection);
+    Provider::AddFuncImpl("ZwOpenEvent", h_ZwOpenEvent);
     Provider::AddFuncImpl("MmGetSystemRoutineAddress", h_MmGetSystemRoutineAddress);
     Provider::AddFuncImpl("IoDeleteSymbolicLink", h_IoDeleteSymbolicLink);
     Provider::AddFuncImpl("PsRemoveLoadImageNotifyRoutine", h_PsRemoveLoadImageNotifyRoutine);

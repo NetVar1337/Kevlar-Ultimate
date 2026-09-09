@@ -56,6 +56,23 @@ if (($manualOut -notmatch "DriverEntry completed successfully") -or ($manualOut 
 }
 Write-Host "MANUAL-MAP SMOKE PASS" -ForegroundColor Green
 
+# Regression: --max-insns must stop a non-returning DriverEntry without
+# affecting normal or worker-thread execution.
+$limitDrv = Join-Path $PSScriptRoot "instruction_limit_driver.sys"
+$limitLog = Join-Path $env:TEMP "kevlar_instruction_limit.log"
+& python (Join-Path $PSScriptRoot "make_test_driver.py") $limitDrv --infinite-loop | Out-Host
+if ($LASTEXITCODE) { throw "instruction-limit test driver generation failed" }
+
+& $exe $limitDrv --max-insns 128 --no-pause 2>&1 | Tee-Object -FilePath $limitLog | Out-Null
+$limitOut = Get-Content $limitLog -Raw
+if (($limitOut -notmatch "DriverEntry instruction limit \(128\) reached") -or
+    ($limitOut -notmatch "DriverEntry failed or was stopped") -or
+    ($limitOut -match "KEVLAR HOST CRASH")) {
+    Write-Host "INSTRUCTION-LIMIT SMOKE FAIL" -ForegroundColor Red
+    exit 1
+}
+Write-Host "INSTRUCTION-LIMIT SMOKE PASS" -ForegroundColor Green
+
 # ke_* semantics self-test (IRQL / APC / DPC / timer) -- no driver needed.
 Write-Host "Running KEVLAR --selftest..."
 $stLog = Join-Path $env:TEMP "kevlar_selftest.log"

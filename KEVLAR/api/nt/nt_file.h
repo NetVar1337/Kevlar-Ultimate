@@ -13,6 +13,7 @@ NTSTATUS h_ZwOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTR
 NTSTATUS h_ZwSetInformationFile(HANDLE FileHandle, PVOID IoStatusBlock, PVOID FileInformation, ULONG Length,
     FILE_INFORMATION_CLASS FileInformationClass);
 NTSTATUS h_ZwOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes);
+NTSTATUS h_ZwOpenEvent(PHANDLE EventHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes);
 NTSTATUS h_ZwDeviceIoControlFile(
     HANDLE           FileHandle,
     HANDLE           Event,

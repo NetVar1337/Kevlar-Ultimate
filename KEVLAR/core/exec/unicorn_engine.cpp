@@ -8,6 +8,8 @@
 #include "core/diagnostics/diag_center.h"
 #include <intrin.h>
 #include <malloc.h>
+#include <mutex>
+#include <unordered_map>
 
 bool UnicornEmu::DiagnosticHooksEnabled = false;
 bool UnicornEmu::VgkErrorOverrideEnabled = false;
@@ -18,6 +20,23 @@ bool UnicornEmu::DevirtualizationTest = false;
 bool UnicornEmu::RdmsrInsnHookSupported = false;
 bool UnicornEmu::WrmsrInsnHookSupported = false;
 bool UnicornEmu::MsrCodeInterceptEnabled = false;
+uint64_t UnicornEmu::DispatchProbeA = 0;
+uint64_t UnicornEmu::DispatchProbeB = 0;
+uint64_t UnicornEmu::PerThreadTraceStart = 0;
+uint64_t UnicornEmu::PerThreadTraceEnd = 0;
+uint64_t UnicornEmu::EacProbeBufferStart = 0;
+uint64_t UnicornEmu::EacProbeBufferEnd = 0;
+bool UnicornEmu::ProbeEnginesOnly = false;
+bool UnicornEmu::WorkersDeepMode = false;
+
+static std::mutex InstrCountLock;
+static std::unordered_map<uc_engine*, uint64_t*> InstrCountMap;
+
+uint64_t UnicornEmu::GetInstrCount(uc_engine* Uc) {
+    std::lock_guard<std::mutex> G(InstrCountLock);
+    auto It = InstrCountMap.find(Uc);
+    return (It != InstrCountMap.end()) ? *It->second : 0;
+}
 bool UnicornEmu::StrictExportsEnabled = false;
 bool UnicornEmu::ProvenanceEnabled = false;
 std::string UnicornEmu::TraceRecordPath;
@@ -93,13 +112,11 @@ bool UnicornEmu::Initialize() {
 
     uint32_t OldTcgBufSize = 0;
     uc_ctl_get_tcg_buffer_size(PrimaryEngine, &OldTcgBufSize);
-    uint32_t NewTcgBufSize = 128 * 1024 * 1024;
-    Err = (uc_err)uc_ctl_set_tcg_buffer_size(PrimaryEngine, NewTcgBufSize);
-    if (Err == UC_ERR_OK) {
-        Logger::Log("{GRN}TCG buffer size: %u -> %u MB{RESET}\n", OldTcgBufSize / (1024*1024), NewTcgBufSize / (1024*1024));
-    } else {
-        Logger::Log("{YEL}TCG buffer size set failed: %s (using default %u){RESET}\n", uc_strerror(Err), OldTcgBufSize);
-    }
+    // Keep Unicorn's primary-engine default. EAC's 42 MB virtualized image can
+    // exhaust the previous 128 MB override in diagnostic mode while TCG is
+    // emitting a block (tcg_out8/tgen_arithr), causing a host fail-fast.
+    Logger::Log("{GRN}TCG buffer size: %u MB (default retained){RESET}\n",
+        OldTcgBufSize / (1024 * 1024));
 
     ZydisDecoderInit(&Decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
     ZydisFormatterInit(&GlobalFormatter, ZYDIS_FORMATTER_STYLE_INTEL);
@@ -312,6 +329,61 @@ uc_engine* UnicornEmu::CreateEngine() {
             } else {
                 Logger::Log("{RED}CreateEngine: MSR fallback hook failed: %s{RESET}\n", uc_strerror(MsrHookErr));
             }
+        }
+
+        bool install_probe = (DispatchProbeA || DispatchProbeB);
+        if (install_probe && ProbeEnginesOnly) {
+            // guest worker engines are created from inside a running guest thread
+            // (TlsContext set on that host thread); client dispatch engines are created
+            // from the client host thread which has no guest ctx.
+            install_probe = !TlsHasGuestContext();
+        }
+        if (install_probe) {
+            if (DispatchProbeA) {
+                uc_err Pe = uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnDispatchProbe, nullptr,
+                    DispatchProbeA, DispatchProbeA);
+                if (Pe != UC_ERR_OK)
+                    Logger::Log("{RED}CreateEngine: dispatch probe A hook failed: %s{RESET}\n", uc_strerror(Pe));
+            }
+            if (DispatchProbeB) {
+                uc_err Pe = uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnDispatchProbe, nullptr,
+                    DispatchProbeB, DispatchProbeB);
+                if (Pe != UC_ERR_OK)
+                    Logger::Log("{RED}CreateEngine: dispatch probe B hook failed: %s{RESET}\n", uc_strerror(Pe));
+            }
+        }
+
+        if (PerThreadTraceStart && PerThreadTraceEnd > PerThreadTraceStart) {
+            bool install_trace = !(ProbeEnginesOnly && TlsHasGuestContext());
+            if (install_trace) {
+            uc_err Te = uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnFocusedTrace, nullptr,
+                PerThreadTraceStart, PerThreadTraceEnd);
+            if (Te != UC_ERR_OK)
+                Logger::Log("{RED}CreateEngine: per-thread focused trace failed: %s{RESET}\n", uc_strerror(Te));
+            }
+        }
+
+        if (ProbeEnginesOnly && !TlsHasGuestContext()) {
+            // client-dispatch engines only: count executed instructions so opcode
+            // recognition can be classified by execution depth (worker engines keep
+            // raw-loop parity, no hooks).
+            auto* Cnt = new uint64_t(0);
+            {
+                std::lock_guard<std::mutex> G(InstrCountLock);
+                InstrCountMap[Uc] = Cnt;
+            }
+            uc_err Ce = uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnInstrCount, Cnt, 1, 0);
+            if (Ce != UC_ERR_OK)
+                Logger::Log("{RED}CreateEngine: instr-count hook failed: %s{RESET}\n", uc_strerror(Ce));
+        }
+
+        if (EacProbeBufferStart && EacProbeBufferEnd > EacProbeBufferStart
+            && !(ProbeEnginesOnly && TlsHasGuestContext())) {
+            uc_err Be = uc_hook_add(Uc, &Hh, UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE,
+                (void*)Hooks::OnEacBufferRead, (void*)(uintptr_t)EacProbeBufferStart,
+                EacProbeBufferStart, EacProbeBufferEnd - 1);
+            if (Be != UC_ERR_OK)
+                Logger::Log("{RED}CreateEngine: EAC buffer-read hook failed: %s{RESET}\n", uc_strerror(Be));
         }
 
         if (!MappedSysMods.empty()) {

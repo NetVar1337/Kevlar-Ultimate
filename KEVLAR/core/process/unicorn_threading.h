@@ -54,6 +54,7 @@ extern uint64_t NextStackAddr;
 
 ThreadContext* Create(uint64_t StartRoutine, uint64_t StartContext, PHANDLE OutHandle);
 ThreadContext* CreateEx(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, PHANDLE OutHandle);
+ThreadContext* CreateUserEx(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, PHANDLE OutHandle);
 // CreateEx + a 5th __fastcall argument written to [RSP+0x28] (kernel APC KernelRoutine).
 ThreadContext* CreateEx5(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, uint64_t Arg5, PHANDLE OutHandle);
 void Terminate(ThreadContext* Ctx, NTSTATUS ExitStatus);

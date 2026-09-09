@@ -50,4 +50,12 @@ DispatchResult DispatchRead(
     void* ReadBuffer, ULONG ReadLength,
     ULONG ReadOffset, ULONG* BytesRead);
 
+void SetIoctlWaitMs(DWORD Ms);
+// 0=off; 1/2 encrypt whole buffer with classic/x64 pointer key;
+// 3/4 encrypt from packet +0x28 with classic/x64 pointer key;
+// 5 uses the current Apex VM's whitened x64 key at packet +0x28.
+// Applied after guest METHOD_NEITHER input allocation so the key uses the
+// exact Type3InputBuffer address seen by the driver.
+void SetEacXteaMode(int Mode);
+
 }

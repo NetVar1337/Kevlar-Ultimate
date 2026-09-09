@@ -1,6 +1,7 @@
 #include "core/exec/unicorn_engine.h"
 #include "core/exec/unicorn_engine_internal.h"
 #include "core/exec/timing_spoof.h"
+#include "core/exec/cpu_profile.h"
 #include <Logger/Logger.h>
 #include <PEMapper/pefile.h>
 #include "host/providers/ntoskrnl_provider.h"
@@ -198,10 +199,7 @@ uint64_t UnicornEmu::MapKuserSharedData() {
             *(uint32_t*)(Kusd + 0x260), *(uint32_t*)(Kusd + 0x264),
             *(uint32_t*)(Kusd + 0x26C), *(uint16_t*)(Kusd + 0x26A));
 
-        SYSTEM_INFO Si;
-        GetNativeSystemInfo(&Si);
-        DWORD ProcCount = Si.dwNumberOfProcessors;
-        if (ProcCount < 4) ProcCount = 4;
+        DWORD ProcCount = CpuProfile::kLogicalProcessorCount;
 
         *(uint32_t*)(Kusd + 0x2C0) = ProcCount;
         *(uint8_t*)(Kusd + 0x2C4) = 1;

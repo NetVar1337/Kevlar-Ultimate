@@ -11,6 +11,8 @@ struct DeviceInfo {
     std::wstring DeviceName;
     std::wstring SymLinkName;
     ULONG DeviceType;
+    uint64_t ExtensionUcAddr;
+    ULONG ExtensionSize;
 };
 
 extern std::vector<DeviceInfo> Devices;

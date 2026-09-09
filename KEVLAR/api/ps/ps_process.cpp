@@ -273,11 +273,13 @@ HANDLE h_PsGetThreadProcess(_ETHREAD* Thread) {
 
 char* h_PsGetProcessImageFileName(_EPROCESS* Process) {
     static char FakeImageName[16] = "System";
-    auto HostProc = UcPtr(Process);
-    if (*EprocUniqueProcessId(HostProc) == (HANDLE)4) {
+    if (!Process)
         return FakeImageName;
-    }
-    return FakeImageName;
+    auto HostProc = UcPtr(Process);
+    if (!HostProc)
+        return FakeImageName;
+    char* Name = EprocImageFileName(HostProc);
+    return (Name && Name[0]) ? Name : FakeImageName;
 }
 
 BOOLEAN h_PsIsSystemThread(_ETHREAD* Thread) {

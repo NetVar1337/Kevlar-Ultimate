@@ -142,6 +142,23 @@ NTSTATUS h_ZwOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, OBJEC
 
     const wchar_t* NameStr = LocalOa.ObjectName ? LocalOa.ObjectName->Buffer : nullptr;
 
+    if (NameStr) {
+        HANDLE RegHandle = nullptr;
+        if (NamedObjectRegistry::Find(NameStr, &RegHandle)) {
+            HANDLE Dup = nullptr;
+            if (DuplicateHandle(GetCurrentProcess(), RegHandle, GetCurrentProcess(), &Dup,
+                    0, FALSE, DUPLICATE_SAME_ACCESS)) {
+                *HostHandle = Dup;
+                Logger::Log("{GRN}\tZwOpenSection: %ls -> private registry handle %p{RESET}\n", NameStr, Dup);
+                return STATUS_SUCCESS;
+            }
+        }
+        if (NamedObjectRegistry::IsBlockedEacName(NameStr)) {
+            Logger::Log("{YEL}\tZwOpenSection: %ls blocked (live host EAC objects are off-limits){RESET}\n", NameStr);
+            return (NTSTATUS)0xC0000034;
+        }
+    }
+
     if (NameStr && _wcsicmp(NameStr, L"\\Device\\PhysicalMemory") == 0) {
         *HostHandle = SectionHandleManager::AllocateHandle();
         Logger::Log("{GRN}\tZwOpenSection: %ls -> fake handle %p{RESET}\n", NameStr, *HostHandle);
@@ -150,6 +167,34 @@ NTSTATUS h_ZwOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, OBJEC
 
     auto Ret = __NtRoutine("ZwOpenSection", HostHandle, DesiredAccess, &LocalOa);
     Logger::Log("{CYN}\tSection name : %ls, access : %llx, ret : %08x{RESET}\n", NameStr ? NameStr : L"(null)", DesiredAccess, Ret);
+    return Ret;
+}
+
+NTSTATUS h_ZwOpenEvent(PHANDLE EventHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes) {
+    auto HostHandle = UcPtr(EventHandle);
+    OBJECT_ATTRIBUTES LocalOa; UNICODE_STRING LocalName;
+    TranslateObjAttr(ObjectAttributes, LocalOa, LocalName);
+    const wchar_t* NameStr = LocalOa.ObjectName ? LocalOa.ObjectName->Buffer : nullptr;
+
+    if (NameStr) {
+        HANDLE RegHandle = nullptr;
+        if (NamedObjectRegistry::Find(NameStr, &RegHandle)) {
+            HANDLE Dup = nullptr;
+            if (DuplicateHandle(GetCurrentProcess(), RegHandle, GetCurrentProcess(), &Dup,
+                    0, FALSE, DUPLICATE_SAME_ACCESS)) {
+                *HostHandle = Dup;
+                Logger::Log("{GRN}\tZwOpenEvent: %ls -> private registry handle %p{RESET}\n", NameStr, Dup);
+                return STATUS_SUCCESS;
+            }
+        }
+        if (NamedObjectRegistry::IsBlockedEacName(NameStr)) {
+            Logger::Log("{YEL}\tZwOpenEvent: %ls blocked (live host EAC objects are off-limits){RESET}\n", NameStr);
+            return (NTSTATUS)0xC0000034;
+        }
+    }
+
+    auto Ret = __NtRoutine("ZwOpenEvent", HostHandle, DesiredAccess, &LocalOa);
+    Logger::Log("{CYN}\tEvent name : %ls, access : %llx, ret : %08x{RESET}\n", NameStr ? NameStr : L"(null)", DesiredAccess, Ret);
     return Ret;
 }
 

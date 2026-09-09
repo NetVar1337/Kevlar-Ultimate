@@ -7,6 +7,12 @@ namespace SectionHandleManager {
     void FreeHandle(HANDLE Handle);
 }
 
+namespace NamedObjectRegistry {
+    void Register(const wchar_t* Name, HANDLE HostHandle);
+    bool Find(const wchar_t* Name, HANDLE* Out);
+    bool IsBlockedEacName(const wchar_t* Name);
+}
+
 NTSTATUS h_ZwMapViewOfSection(
     HANDLE SectionHandle, HANDLE ProcessHandle, PVOID* BaseAddress,
     uint64_t ZeroBits, uint64_t CommitSize, PLARGE_INTEGER SectionOffset,

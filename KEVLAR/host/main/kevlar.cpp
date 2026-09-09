@@ -32,12 +32,19 @@
 #include "core/diagnostics/diag_center.h"
 #include "core/devirt/vtil_analysis.h"
 #include "api/io/io_device.h"
+#include "api/nt/nt_memory.h"
 #include "api/ke/ke_misc.h"
 #include "api/ke/ke_sync.h"
 #include "api/ke/ke_timer.h"
 #include "api/ke/ke_event.h"
 
 static bool NoPause = false;
+static bool EacServiceEmu = false;
+
+// advapi32 SDDL API (declared here to avoid windows.h include-order churn)
+extern "C" BOOL WINAPI ConvertStringSecurityDescriptorToSecurityDescriptorW(
+    LPCWSTR StringSecurityDescriptor, DWORD StringSDRevision,
+    PSECURITY_DESCRIPTOR* SecurityDescriptor, PVOID* SecurityDescriptorSize);
 static bool SelfTest = false;
 
 // Host-level selftest for the ke_* semantics: exercises IRQL, APC queue/delivery,
@@ -238,6 +245,8 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --trace <file>          Record deterministic execution trace{RESET}\n");
         Logger::Log("  --check <file>          Replay trace; report first divergence{RESET}\n");
         Logger::Log("  --no-pause              Skip final pause; exit ~5s after a no-thread run (automation){RESET}\n");
+        Logger::Log("  --workers-deep          Worker threads use the extended emulation loop (SSE-fault dispatch + INSN_INVALID retry); default is raw uc_emu_start vendor parity{RESET}\n");
+        Logger::Log("  --eac-service-emu       Create host-side EAC service IPC objects (Global\\EasyAntiCheat_EOSBin section + EventDriver/Game/Module) before DriverEntry{RESET}\n");
         Logger::Log("  --vtil-rva <rva>        Lift a bounded AMD64 region into optimized VTIL{RESET}\n");
         Logger::Log("  --vtil-size <bytes>     Bytes available to the VTIL lifter (default: 0x5000){RESET}\n");
         Logger::Log("  --vtil-out <file>       VTIL serialization path (default: executable directory){RESET}\n");
@@ -382,6 +391,11 @@ int main(int Argc, char* Argv[]) {
                 ClientScript = std::move(Val);
             } else if (Arg == "--no-pause") {
                 NoPause = true;
+            } else if (Arg == "--workers-deep") {
+                UnicornEmu::WorkersDeepMode = true;
+                Logger::Log("{CYN}Worker deep-mode: extended emulation loop for worker threads{RESET}\n");
+            } else if (Arg == "--eac-service-emu") {
+                EacServiceEmu = true;
             } else if (Arg.rfind("--max-insns", 0) == 0) {
                 std::string Val = (Arg.size() > 11 && Arg[11] == '=')
                     ? Arg.substr(12) : (I + 1 < Argc ? Argv[++I] : "");
@@ -655,6 +669,63 @@ int main(int Argc, char* Argv[]) {
         }
     }
 
+    if (EacServiceEmu) {
+        // Emulate the EasyAntiCheat_EOS service side of the IPC contract with
+        // NAMESPACE ISOLATION: objects are created UNNAMED on the host and
+        // served to the guest through NamedObjectRegistry, so a live EAC
+        // install's Global\EasyAntiCheat_EOS* objects are never touched.
+        // Live-system ground truth (binread of the real section while Apex was
+        // running): 28-byte header (service sub_424030 values) followed at
+        // +0x1C by the FULL on-disk driver image (sha 5149a978... == file).
+        PSECURITY_DESCRIPTOR EacSd = nullptr;
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:(A;OICI;GA;;;BG)(A;OICI;GA;;;AN)(A;OICI;GRGWGX;;;AU)(A;OICI;GA;;;BA)",
+            1, &EacSd, nullptr);
+        SECURITY_ATTRIBUTES EacSa = { sizeof(EacSa), EacSd, FALSE };
+        HANDLE BinSection = CreateFileMappingW(INVALID_HANDLE_VALUE, &EacSa, PAGE_READWRITE, 0, 0x6000000, nullptr);
+        bool Populated = false;
+        if (BinSection) {
+            auto* View = (uint8_t*)MapViewOfFile(BinSection, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+            if (View) {
+                *(uint32_t*)(View + 0) = 1;
+                *(uint32_t*)(View + 4) = 0x06000000u;
+                *(uint32_t*)(View + 8) = 0x00080000u;
+                *(uint32_t*)(View + 12) = 0x00010005u;
+                *(uint32_t*)(View + 16) = 0;
+                *(uint32_t*)(View + 20) = 0;
+                *(uint32_t*)(View + 24) = 0;
+                FILE* DrvFile = nullptr;
+                fopen_s(&DrvFile, DriverPath.c_str(), "rb");
+                if (DrvFile) {
+                    size_t Got = fread(View + 0x1C, 1, 0x6000000u - 0x1C, DrvFile);
+                    fclose(DrvFile);
+                    Populated = Got > 0x1000;
+                    Logger::Log("{GRN}EAC service-emu: section populated with driver image (%zu bytes at +0x1C){RESET}\n", Got);
+                }
+            }
+            NamedObjectRegistry::Register(L"Global\\EasyAntiCheat_EOSBin", BinSection);
+            NamedObjectRegistry::Register(L"\\BaseNamedObjects\\EasyAntiCheat_EOSBin", BinSection);
+        }
+        HANDLE EvModule = CreateEventW(&EacSa, TRUE, FALSE, nullptr);
+        HANDLE EvDriver = CreateEventW(&EacSa, TRUE, FALSE, nullptr);
+        HANDLE EvGame = CreateEventW(&EacSa, TRUE, FALSE, nullptr);
+        if (EvModule) {
+            NamedObjectRegistry::Register(L"Global\\EasyAntiCheat_EOSEventModule", EvModule);
+            NamedObjectRegistry::Register(L"\\BaseNamedObjects\\EasyAntiCheat_EOSEventModule", EvModule);
+        }
+        if (EvDriver) {
+            NamedObjectRegistry::Register(L"Global\\EasyAntiCheat_EOSEventDriver", EvDriver);
+            NamedObjectRegistry::Register(L"\\BaseNamedObjects\\EasyAntiCheat_EOSEventDriver", EvDriver);
+        }
+        if (EvGame) {
+            NamedObjectRegistry::Register(L"Global\\EasyAntiCheat_EOSEventGame", EvGame);
+            NamedObjectRegistry::Register(L"\\BaseNamedObjects\\EasyAntiCheat_EOSEventGame", EvGame);
+        }
+        Logger::Log("{GRN}EAC service-emu(isolated): bin=%p populated=%d events=%p/%p/%p{RESET}\n",
+            BinSection, Populated ? 1 : 0, EvModule, EvDriver, EvGame);
+        if (EacSd) LocalFree(EacSd);
+    }
+
     Logger::Log("{CYN}Starting DriverEntry at RVA {WHT}0x%llx{RESET}\n", MainModule->GetEP());
 
     bool Result = UnicornEmu::StartEmulation(UnicornEmu::PrimaryEngine, DRIVER_BASE_UC + MainModule->GetEP());
@@ -728,6 +799,15 @@ int main(int Argc, char* Argv[]) {
             double NoThreadTimeout = NoPause ? 5.0 : MaxWaitSeconds;
             if (!EverHadThreads && Elapsed >= NoThreadTimeout) {
                 Logger::Log("{YEL}No threads spawned after %.0fs — giving up{RESET}\n", Elapsed);
+                break;
+            }
+
+            if (NoPause && Elapsed >= MaxWaitSeconds) {
+                // automation mode: honor the documented 3600s cap even while
+                // driver threads are still running (EAC keeps a scanner alive
+                // forever); interactive default is unchanged.
+                Logger::Log("{YEL}Wait cap %.0fs reached (%d thread(s) still running) - shutting down{RESET}\n",
+                    Elapsed, RunningThreads);
                 break;
             }
 

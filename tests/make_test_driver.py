@@ -56,7 +56,7 @@ def import_table(library):
     return out
 
 
-def build_driver(import_library=None):
+def build_driver(import_library=None, infinite_loop=False):
     # --- code at RVA 0x1000: KPCR.Self via GS, conditional branch, STATUS_SUCCESS ---
     #   0x1000: sub rsp, 0x28
     #   0x1004: mov rax, qword ptr gs:[0x20]     ; KPCR.Self
@@ -73,25 +73,28 @@ def build_driver(import_library=None):
     # 0x40000000 hypervisor leaf. The harness logs both under --diag; the coherent
     # profile must present bare metal (ECX.31=0, empty hypervisor leaves) or the
     # driver-level checks that rejected FACEIT_IOMMU.sys fire again.
-    code = bytearray()
-    code += bytes([0x48, 0x83, 0xEC, 0x28])                                       # sub rsp,0x28
-    code += bytes([0xB8, 0x01, 0x00, 0x00, 0x00])                                 # mov eax,1
-    code += bytes([0x0F, 0xA2])                                                   # cpuid  (leaf 0x1)
-    code += bytes([0xB8, 0x00, 0x00, 0x00, 0x40])                                 # mov eax,0x40000000
-    code += bytes([0x0F, 0xA2])                                                   # cpuid  (hypervisor leaf)
-    code += bytes([0x65, 0x48, 0x8B, 0x04, 0x25, 0x20, 0x00, 0x00, 0x00])         # mov rax, gs:[0x20]
-    code += bytes([0x48, 0x85, 0xC0])                                             # test rax,rax
-    code += bytes([0x74, 0x00])                                                   # jz fail (rel patched below)
-    code += bytes([0x31, 0xC0])                                                   # xor eax,eax
-    code += bytes([0x48, 0x83, 0xC4, 0x28])                                       # add rsp,0x28
-    code += bytes([0xC3])                                                         # ret
-    fail = bytearray()
-    fail += bytes([0xB8, 0x01, 0x00, 0x00, 0xC0])                                 # mov eax,0xC0000001
-    fail += bytes([0x48, 0x83, 0xC4, 0x28])                                       # add rsp,0x28
-    fail += bytes([0xC3])                                                         # ret
-    jz_pos = code.index(0x74)
-    code[jz_pos + 1] = (len(code) - (jz_pos + 2)) & 0xFF   # target = fail start (len(code))
-    code += fail
+    if infinite_loop:
+        code = bytearray([0xEB, 0xFE])  # jmp $ (instruction-limit regression fixture)
+    else:
+        code = bytearray()
+        code += bytes([0x48, 0x83, 0xEC, 0x28])                                       # sub rsp,0x28
+        code += bytes([0xB8, 0x01, 0x00, 0x00, 0x00])                                 # mov eax,1
+        code += bytes([0x0F, 0xA2])                                                   # cpuid  (leaf 0x1)
+        code += bytes([0xB8, 0x00, 0x00, 0x00, 0x40])                                 # mov eax,0x40000000
+        code += bytes([0x0F, 0xA2])                                                   # cpuid  (hypervisor leaf)
+        code += bytes([0x65, 0x48, 0x8B, 0x04, 0x25, 0x20, 0x00, 0x00, 0x00])         # mov rax, gs:[0x20]
+        code += bytes([0x48, 0x85, 0xC0])                                             # test rax,rax
+        code += bytes([0x74, 0x00])                                                   # jz fail (rel patched below)
+        code += bytes([0x31, 0xC0])                                                   # xor eax,eax
+        code += bytes([0x48, 0x83, 0xC4, 0x28])                                       # add rsp,0x28
+        code += bytes([0xC3])                                                         # ret
+        fail = bytearray()
+        fail += bytes([0xB8, 0x01, 0x00, 0x00, 0xC0])                                 # mov eax,0xC0000001
+        fail += bytes([0x48, 0x83, 0xC4, 0x28])                                       # add rsp,0x28
+        fail += bytes([0xC3])                                                         # ret
+        jz_pos = code.index(0x74)
+        code[jz_pos + 1] = (len(code) - (jz_pos + 2)) & 0xFF   # target = fail start
+        code += fail
 
     data = bytearray(code)
     if import_library:
@@ -166,7 +169,7 @@ def main():
     import_library = "missingx.sys" if "--manual-map-only" in sys.argv else (
         "ntoskrnl.exe" if "--with-import" in sys.argv else None
     )
-    image = build_driver(import_library)
+    image = build_driver(import_library, infinite_loop="--infinite-loop" in sys.argv)
     with open(out, "wb") as f:
         f.write(image)
     print(f"wrote {out} ({len(image)} bytes)"

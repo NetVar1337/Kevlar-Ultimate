@@ -6,9 +6,8 @@
 #include "core/memory/unicorn_memory.h"
 #include "core/exception/seh_dispatch.h"
 
-#include "core/exec/unicorn_engine_internal.h"
 
-EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) {
+EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_t InstructionLimit) {
     EmulationLoopResult R = {};
     R.Ok = true;
     uint64_t CurrentEmuRip = EntryPoint;
@@ -16,7 +15,7 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) {
 
     __try {
     for (;;) {
-        uc_err Err = uc_emu_start(Uc, CurrentEmuRip, SENTINEL_RET_ADDR, 0, 0);
+        uc_err Err = uc_emu_start(Uc, CurrentEmuRip, SENTINEL_RET_ADDR, 0, InstructionLimit);
 
         if (UnicornEmu::SseFault.Active) {
             UnicornEmu::SseFault.Active = false;
@@ -48,6 +47,17 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint) {
             Logger::Log("{RED}Emulation error at RIP={WHT}0x%llx{RED}: %s{RESET}\n", CurrentRip, uc_strerror(Err));
             R.Ok = false;
             return R;
+        }
+
+        if (InstructionLimit) {
+            uint64_t StoppedRip = 0;
+            uc_reg_read(Uc, UC_X86_REG_RIP, &StoppedRip);
+            if (StoppedRip != SENTINEL_RET_ADDR) {
+                Logger::Log("{YEL}DriverEntry instruction limit (%llu) reached at RIP=0x%llx{RESET}\n",
+                    InstructionLimit, StoppedRip);
+                R.Ok = false;
+                return R;
+            }
         }
 
         break;
@@ -131,7 +141,7 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint) {
         return 0;
     }, nullptr, 0, nullptr);
 
-    auto LoopResult = RunEmulationLoop(Uc, EntryPoint);
+    auto LoopResult = RunEmulationLoop(Uc, EntryPoint, UnicornEmu::ExecutionInstructionLimit);
     if (LoopResult.HostCrash) {
         Logger::Log("{RED}HOST CRASH in primary emulation thread! Exception code: 0x%08x{RESET}\n", LoopResult.ExceptionCode);
         Logger::Log("{RED}  UC RIP=0x%llx (drv+0x%llx) RSP=0x%llx{RESET}\n", LoopResult.CrashRip,

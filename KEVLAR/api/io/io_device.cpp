@@ -72,12 +72,15 @@ NTSTATUS h_IoCreateDevice(_DRIVER_OBJECT* DriverObject, ULONG DeviceExtensionSiz
             DevNameStr = std::wstring(HostBuf, HostDevName->Length / sizeof(wchar_t));
     }
 
-    Logger::Log("  {GRN}Created device: {WHT}%ls {GRN}-> {WHT}0x%llx{RESET}\n",
-        DevNameStr.empty() ? L"(null)" : DevNameStr.c_str(), DevUcAddr);
+    Logger::Log("  {GRN}Created device: {WHT}%ls {GRN}-> {WHT}0x%llx {GRN}ext=0x%llx/0x%x{RESET}\n",
+        DevNameStr.empty() ? L"(null)" : DevNameStr.c_str(), DevUcAddr,
+        (unsigned long long)(DeviceExtensionSize ? DevUcAddr + sizeof(_DEVICE_OBJECT) : 0),
+        DeviceExtensionSize);
 
     {
         std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
-        DeviceTracker::Devices.push_back({ DevUcAddr, DevNameStr, L"", DeviceType });
+        DeviceTracker::Devices.push_back({ DevUcAddr, DevNameStr, L"", DeviceType,
+            DeviceExtensionSize ? DevUcAddr + sizeof(_DEVICE_OBJECT) : 0, DeviceExtensionSize });
     }
 
     return 0;

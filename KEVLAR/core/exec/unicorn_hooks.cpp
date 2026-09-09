@@ -269,6 +269,35 @@ void UnicornEmu::Hooks::OnSysModExec(uc_engine* Uc, uint64_t Addr, uint32_t Size
                 Logger::Log("{RED}SysMod UNHANDLED: {WHT}%s!%s {GRY}(0x%llx) {RED}-> forcing RET 0{RESET}\n",
                     Entry->ModName.c_str(), Entry->FuncName.c_str(), Addr);
                 uint64_t Zero = 0;
+                // TBS: success + plausible out-params so the driver's TPM path
+                // continues instead of dereferencing a garbage context handle.
+                if (Entry->ModName == "tbs.sys" && Entry->FuncName == "Tbsi_Context_Create") {
+                    uint64_t PhContext = 0;
+                    uc_reg_read(Uc, UC_X86_REG_RDX, &PhContext);
+                    if (PhContext > 0x10000 && PhContext < 0x7FFFFFFFFFFFULL) {
+                        uint64_t FakeCtx = 0x7AC0FEE0ULL;
+                        uc_mem_write(Uc, PhContext, &FakeCtx, sizeof(FakeCtx));
+                    } else if (PhContext >= 0xFFFF000000000000ULL) {
+                        uint64_t FakeCtx = 0x7AC0FEE0ULL;
+                        uc_mem_write(Uc, PhContext, &FakeCtx, sizeof(FakeCtx));
+                    }
+                    Logger::Log("{YEL}SysMod tbs: Tbsi_Context_Create -> fake context 0x7AC0FEE0{RESET}\n");
+                } else if (Entry->ModName == "tbs.sys" && Entry->FuncName == "Tbsi_GetDeviceInfo") {
+                    uint64_t SizeArg = 0, InfoPtr = 0;
+                    uc_reg_read(Uc, UC_X86_REG_RCX, &SizeArg);
+                    uc_reg_read(Uc, UC_X86_REG_RDX, &InfoPtr);
+                    struct {
+                        uint32_t StructVersion;
+                        uint32_t TpmVersion;
+                        uint32_t InterfaceType;
+                        uint32_t ImplementationRevision;
+                    } Info = { 1, 2, 3, 0 }; // TPM 2.0, hardware interface
+                    uint64_t Copy = SizeArg < sizeof(Info) ? SizeArg : sizeof(Info);
+                    if (InfoPtr && Copy)
+                        uc_mem_write(Uc, InfoPtr, &Info, (size_t)Copy);
+                    Logger::Log("{YEL}SysMod tbs: Tbsi_GetDeviceInfo -> TPM2/HW (%llu bytes){RESET}\n",
+                        (unsigned long long)Copy);
+                }
                 uc_reg_write(Uc, UC_X86_REG_RAX, &Zero);
             }
             Rsp += 8;

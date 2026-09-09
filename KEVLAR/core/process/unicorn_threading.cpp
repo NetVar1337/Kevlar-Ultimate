@@ -1,6 +1,7 @@
 #include "core/process/unicorn_threading.h"
 #include "core/exec/unicorn_engine.h"
 #include "core/exec/unicorn_engine_internal.h"
+#include "core/exec/unicorn_engine_internal.h"
 #include "core/memory/unicorn_memory.h"
 #include "host/providers/ntoskrnl_provider.h"
 #include "include/ntoskrnl_struct.h"
@@ -19,6 +20,8 @@ namespace UnicornThread {
 }
 
 static thread_local ThreadContext* TlsContext = nullptr;
+
+bool TlsHasGuestContext() { return TlsContext != nullptr; }
 
 static DWORD ThreadEntryCore(ThreadStartInfo* Info) {
     auto Ctx = Info->Context;
@@ -63,11 +66,25 @@ static DWORD ThreadEntryCore(ThreadStartInfo* Info) {
     Logger::Log("{MAG}Thread %llu starting at 0x%llx{RESET}\n", Ctx->ThreadId, Info->StartRoutine);
 
     Ctx->Running = true;
-    // Vendor-parity: raw engine run; workers are short-lived decoys whose quick exit
-    // the driver's init state machine expects (extended TryEmulate retry here stalls
-    // the DriverEntry completion-wait spin at drv+0x1edd75).
-    auto Err = uc_emu_start(Info->Engine, Info->StartRoutine, SENTINEL_RET_ADDR, 0, 0);
+    uc_err Err = UC_ERR_OK;
+    if (UnicornEmu::WorkersDeepMode) {
+        // Opt-in (--workers-deep): extended loop with SSE-fault dispatch and
+        // INSN_INVALID TryEmulate retry. Default below stays raw for vendor parity.
+        auto LR = RunEmulationLoop(Info->Engine, Info->StartRoutine);
+        if (!LR.Ok)
+            Err = LR.HostCrash ? UC_ERR_EXCEPTION : UC_ERR_INSN_INVALID;
+    } else {
+        // Vendor-parity: raw engine run; workers are short-lived decoys whose quick exit
+        // the driver's init state machine expects (extended TryEmulate retry here stalls
+        // the DriverEntry completion-wait spin at drv+0x1edd75).
+        Err = uc_emu_start(Info->Engine, Info->StartRoutine, SENTINEL_RET_ADDR, 0, 0);
+    }
     Ctx->Running = false;
+
+    if (UnicornEmu::ProbeEnginesOnly) {
+        Logger::Log("{MAG}Thread %llu icount=%llu{RESET}\n", Ctx->ThreadId,
+            (unsigned long long)UnicornEmu::GetInstrCount(Info->Engine));
+    }
 
     if (Err != UC_ERR_OK) {
         uint64_t CrashRip = 0;
@@ -225,7 +242,7 @@ ThreadContext* UnicornThread::Create(uint64_t StartRoutine, uint64_t StartContex
     return Ctx;
 }
 
-static ThreadContext* CreateExImpl(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, uint64_t Arg5, bool UseArg5, PHANDLE OutHandle) {
+static ThreadContext* CreateExImpl(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, uint64_t Arg5, bool UseArg5, bool UserCaller, PHANDLE OutHandle) {
     auto CallerEngine = UnicornThread::GetCurrentEngine();
     std::lock_guard<std::mutex> Lock(UnicornThread::ThreadLock);
 
@@ -237,13 +254,29 @@ static ThreadContext* CreateExImpl(uint64_t StartRoutine, uint64_t Arg1, uint64_
     Ctx->EthreadHostPtr = (_ETHREAD*)UnicornMem::UcToHost(Ctx->EthreadUcAddr);
 
     memset(Ctx->EthreadHostPtr, 0, sizeof(_ETHREAD));
-    Ctx->EthreadHostPtr->Tcb.Process = (_KPROCESS*)EPROCESS_BASE_UC;
-    Ctx->EthreadHostPtr->Tcb.ApcState.Process = (_KPROCESS*)EPROCESS_BASE_UC;
-    EthreadCid(Ctx->EthreadHostPtr)->UniqueProcess = (void*)4;
+    uint64_t ProcessUcAddr = EPROCESS_BASE_UC;
+    if (UserCaller) {
+        ProcessUcAddr = UnicornMem::AllocateVariable(CallerEngine, sizeof(_EPROCESS), "UserEPROCESS");
+        auto* UserProc = (_EPROCESS*)UnicornMem::UcToHost(ProcessUcAddr);
+        auto* SystemProc = (_EPROCESS*)UnicornMem::UcToHost(EPROCESS_BASE_UC);
+        if (UserProc) {
+            if (SystemProc) memcpy(UserProc, SystemProc, sizeof(_EPROCESS));
+            else memset(UserProc, 0, sizeof(_EPROCESS));
+            *EprocUniqueProcessId(UserProc) = (void*)0x1337;
+            *EprocProtection(UserProc) = 0;
+            *EprocWow64Process(UserProc) = nullptr;
+            memset(EprocImageFileName(UserProc), 0, 15);
+            memcpy(EprocImageFileName(UserProc), "r5apex.exe", 11);
+        }
+    }
+    Ctx->EthreadHostPtr->Tcb.Process = (_KPROCESS*)ProcessUcAddr;
+    Ctx->EthreadHostPtr->Tcb.ApcState.Process = (_KPROCESS*)ProcessUcAddr;
+    EthreadCid(Ctx->EthreadHostPtr)->UniqueProcess = (void*)(uintptr_t)(UserCaller ? 0x1337 : 4);
     EthreadCid(Ctx->EthreadHostPtr)->UniqueThread = (void*)(uintptr_t)Ctx->ThreadId;
-    Ctx->EthreadHostPtr->Tcb.PreviousMode = 0;
+    Ctx->EthreadHostPtr->Tcb.PreviousMode = UserCaller ? 1 : 0;
     Ctx->EthreadHostPtr->Tcb.State = 1;
-    Ctx->EthreadHostPtr->Tcb.MiscFlags |= 0x400;
+    if (!UserCaller)
+        Ctx->EthreadHostPtr->Tcb.MiscFlags |= 0x400;
 
     {
         uint64_t WlhUcAddr2 = Ctx->EthreadUcAddr + offsetof(_ETHREAD, Tcb.Header.WaitListHead);
@@ -332,11 +365,15 @@ static ThreadContext* CreateExImpl(uint64_t StartRoutine, uint64_t Arg1, uint64_
 }
 
 ThreadContext* UnicornThread::CreateEx(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, PHANDLE OutHandle) {
-    return CreateExImpl(StartRoutine, Arg1, Arg2, Arg3, Arg4, 0, false, OutHandle);
+    return CreateExImpl(StartRoutine, Arg1, Arg2, Arg3, Arg4, 0, false, false, OutHandle);
+}
+
+ThreadContext* UnicornThread::CreateUserEx(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, PHANDLE OutHandle) {
+    return CreateExImpl(StartRoutine, Arg1, Arg2, Arg3, Arg4, 0, false, true, OutHandle);
 }
 
 ThreadContext* UnicornThread::CreateEx5(uint64_t StartRoutine, uint64_t Arg1, uint64_t Arg2, uint64_t Arg3, uint64_t Arg4, uint64_t Arg5, PHANDLE OutHandle) {
-    return CreateExImpl(StartRoutine, Arg1, Arg2, Arg3, Arg4, Arg5, true, OutHandle);
+    return CreateExImpl(StartRoutine, Arg1, Arg2, Arg3, Arg4, Arg5, true, false, OutHandle);
 }
 
 void UnicornThread::Terminate(ThreadContext* Ctx, NTSTATUS ExitStatus) {

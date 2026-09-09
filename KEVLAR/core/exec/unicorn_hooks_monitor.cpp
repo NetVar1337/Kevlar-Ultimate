@@ -299,6 +299,31 @@ void UnicornEmu::Hooks::OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Si
         Rax, Rcx, Rdx, Rbx, Rsi, Rdi);
     Logger::Log("{GRY}  RSP=%016llx RBP=%016llx R8=%016llx R9=%016llx R10=%016llx R11=%016llx{RESET}\n",
         Rsp, Rbp, R8, R9, R10, R11);
+    Logger::Log("{GRY}  R12=%016llx R13=%016llx R14=%016llx R15=%016llx{RESET}\n",
+        R12, R13, R14, R15);
+
+    uint8_t Code[16] = {};
+    if (uc_mem_read(Uc, Addr, Code, sizeof(Code)) == UC_ERR_OK) {
+        ZydisDecodedInstruction Instr;
+        ZydisDecodedOperand Operands[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_SUCCESS(ZydisDecoderDecodeFull(&UnicornEmu::Decoder, Code, sizeof(Code), &Instr, Operands))) {
+            for (int I = 0; I < Instr.operand_count; ++I) {
+                if (Operands[I].type != ZYDIS_OPERAND_TYPE_MEMORY)
+                    continue;
+
+                const uint64_t EffectiveAddress = ComputeEffectiveAddress(Uc, &Operands[I], &Instr, Addr);
+                const int ReadSize = (Operands[I].size > 64) ? 8 : (int)(Operands[I].size / 8);
+                uint64_t ReadValue = 0;
+                const uc_err ReadError = ReadSize > 0
+                    ? uc_mem_read(Uc, EffectiveAddress, &ReadValue, ReadSize)
+                    : UC_ERR_ARG;
+                Logger::Log("{MAG}[FOCUS MEM] op=%d ea=0x%016llx size=%u value=%s0x%016llx (%s){RESET}\n",
+                    I, EffectiveAddress, Operands[I].size,
+                    ReadError == UC_ERR_OK ? "" : "unreadable/",
+                    ReadValue, DescribeVmContextValue(EffectiveAddress).c_str());
+            }
+        }
+    }
 
     if (Addr == DRIVER_BASE_UC + 0x2680F00) {
         Logger::Log("{RED}  *** VM LOOP REACHED ***{RESET}\n");

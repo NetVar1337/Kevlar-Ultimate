@@ -512,9 +512,9 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
         ULONG RequiredSize = 0x20;
         WriteRetLen(RequiredSize);
         if (SystemInformationLength < RequiredSize) {
-            Logger::Log("  {MAG}NtQuerySystemInformation class={WHT}0x91{MAG} (SystemCodeIntegrityPolicyInformation) {MAG}bufLen={WHT}0x%x {MAG}-> STATUS_BUFFER_OVERFLOW {MAG}caller=drv+0x%llx{RESET}\n",
+            Logger::Log("  {MAG}NtQuerySystemInformation class={WHT}0x91{MAG} (SystemCodeIntegrityPolicyInformation) {MAG}bufLen={WHT}0x%x {MAG}-> STATUS_INFO_LENGTH_MISMATCH {MAG}caller=drv+0x%llx{RESET}\n",
                 SystemInformationLength, CallerRva);
-            return (NTSTATUS)0x80000005;
+            return (NTSTATUS)0xC0000004;
         }
         uint64_t FakeCIPolicyBufAddr = 0xFFFFF80200190000ULL;
         {
@@ -626,14 +626,16 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
             Logger::Log("  {GRN}Class {WHT}%08x {GRN}success{RESET}\n", SystemInformationClass);
         if (SystemInformationClass == 0xb) {
             RTL_PROCESS_MODULES* loadedmodules = (RTL_PROCESS_MODULES*)ApiBuf;
-            if (ApiRetLen < sizeof(ULONG)) {
+            constexpr ULONG ModulesOffset = (ULONG)offsetof(RTL_PROCESS_MODULES, Modules);
+            static_assert(offsetof(RTL_PROCESS_MODULES, Modules) == 8);
+            if (ApiRetLen < ModulesOffset) {
                 free(ApiBuf);
                 return STATUS_INFO_LENGTH_MISMATCH;
             }
 
             ULONG MaxModulesByLen = 0;
-            if (ApiRetLen > sizeof(ULONG)) {
-                MaxModulesByLen = (ApiRetLen - sizeof(ULONG)) / sizeof(RTL_PROCESS_MODULE_INFORMATION);
+            if (ApiRetLen > ModulesOffset) {
+                MaxModulesByLen = (ApiRetLen - ModulesOffset) / sizeof(RTL_PROCESS_MODULE_INFORMATION);
             }
             ULONG ReportedModules = loadedmodules->NumberOfModules;
             if (ReportedModules > MaxModulesByLen) {
@@ -644,10 +646,13 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
                 loadedmodules->NumberOfModules = MaxModulesByLen;
             }
 
-            bool ObserveOnlyModuleStructReads = UnicornEmu::DiagnosticHooksEnabled;
+            // Diagnostic mode must observe the SAME guest-valid module list as
+            // normal execution. Returning host-real kernel bases makes EAC
+            // dereference unmapped VAs and ultimately corrupts the host heap.
+            bool ObserveOnlyModuleStructReads = false;
             if (ObserveOnlyModuleStructReads) {
                 ULONG ModuleCount = loadedmodules->NumberOfModules;
-                ULONG RequiredSize = sizeof(ULONG) + ModuleCount * sizeof(RTL_PROCESS_MODULE_INFORMATION);
+                ULONG RequiredSize = ModulesOffset + ModuleCount * sizeof(RTL_PROCESS_MODULE_INFORMATION);
                 if (RequiredSize > ApiRetLen) RequiredSize = ApiRetLen;
                 WriteRetLen(RequiredSize);
 
@@ -749,7 +754,7 @@ NTSTATUS h_NtQuerySystemInformation(uint32_t SystemInformationClass, uintptr_t S
 
             loadedmodules->NumberOfModules = WriteIdx;
 
-            ULONG PatchedSize = sizeof(ULONG) + WriteIdx * sizeof(RTL_PROCESS_MODULE_INFORMATION);
+            ULONG PatchedSize = ModulesOffset + WriteIdx * sizeof(RTL_PROCESS_MODULE_INFORMATION);
             if (PatchedSize > ApiBufSize) PatchedSize = ApiBufSize;
             WriteRetLen(PatchedSize);
 

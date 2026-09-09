@@ -1137,6 +1137,43 @@ void UnicornEmu::Hooks::OnWrmsr(uc_engine* Uc, void* UserData) {
     DetectionRecordWrmsr(MsrId, Value, Rip);
 }
 
+void UnicornEmu::Hooks::OnDispatchProbe(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    if (Addr != UnicornEmu::DispatchProbeA && Addr != UnicornEmu::DispatchProbeB)
+        return;
+    uint64_t Rax = 0, Rbp = 0, Val = 0;
+    uc_reg_read(Uc, UC_X86_REG_RAX, &Rax);
+    uc_reg_read(Uc, UC_X86_REG_RBP, &Rbp);
+    if (Rax)
+        uc_mem_read(Uc, Rax, &Val, 8);
+    Logger::Log("{MAG}[PROBE %c] RAX=0x%llx val=0x%llx RBP=0x%llx{RESET}\n",
+        Addr == UnicornEmu::DispatchProbeA ? 'A' : 'B', Rax, Val, Rbp);
+}
+
+void UnicornEmu::Hooks::OnInstrCount(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    if (UserData)
+        (*(uint64_t*)UserData)++;
+}
+
+void UnicornEmu::Hooks::OnEacBufferRead(uc_engine* Uc, uc_mem_type Type,
+    uint64_t Addr, int Size, int64_t Value, void* UserData) {
+    static thread_local uint32_t Count = 0;
+    uint64_t Start = (uint64_t)(uintptr_t)UserData;
+    if (Count++ >= 128 || !Start || Addr < Start)
+        return;
+    uint64_t Rip = 0, Val = 0;
+    uc_reg_read(Uc, UC_X86_REG_RIP, &Rip);
+    if (Type == UC_MEM_WRITE) {
+        Val = (uint64_t)Value;
+    } else {
+        int ReadSize = Size > 8 ? 8 : Size;
+        if (ReadSize > 0)
+            uc_mem_read(Uc, Addr, &Val, ReadSize);
+    }
+    Logger::Log("{MAG}EACBUF %s off=0x%llx size=%d val=0x%llx RIP=0x%llx (drv+0x%llx){RESET}\n",
+        Type == UC_MEM_WRITE ? "WRITE" : "READ", Addr - Start, Size, Val, Rip,
+        Rip >= DRIVER_BASE_UC ? Rip - DRIVER_BASE_UC : 0);
+}
+
 void UnicornEmu::Hooks::OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
     // --- RDTSC / RDTSCP fallback (UC_HOOK_INSN for RDTSC is unreliable in Unicorn 2.x) ---
     {

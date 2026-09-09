@@ -105,6 +105,17 @@ void UnicornMem::FreePool(uc_engine* Uc, uint64_t UcAddr) {
     }
 
     void* HostBuf = It->second;
+    uint64_t AllocSize = PoolSizes[UcAddr];
+
+    {
+        std::lock_guard<std::mutex> MapGuard(UnicornEmu::UcMapLock);
+        uc_err Err = uc_mem_unmap(Uc, UcAddr, AllocSize);
+        if (Err != UC_ERR_OK) {
+            Logger::Log("{RED}Pool free: failed to unmap 0x%llx (size=0x%llx): %s; retaining backing{RESET}\n",
+                UcAddr, AllocSize, uc_strerror(Err));
+            return;
+        }
+    }
 
     HostToUcMap.erase(HostBuf);
     UcToHostMap.erase(It);

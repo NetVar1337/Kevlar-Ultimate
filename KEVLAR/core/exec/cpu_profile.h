@@ -19,6 +19,8 @@ namespace CpuProfile {
 
 // TSC derived from leaf 0x15: 38.4MHz crystal * 168 / 2 = 3.2256 GHz.
 inline constexpr uint64_t kProfileTscHz = 3225600000ULL;
+// Leaf 0x01 EBX and topology leaves advertise 16 logical processors.
+inline constexpr uint32_t kLogicalProcessorCount = 16;
 // Plausible post-boot TSC value (~10 min uptime at 3.226 GHz); fixed so runs
 // are reproducible instead of seeding from the host RDTSC.
 inline constexpr uint64_t kInitialVirtualTsc = 0x1C0000000000ULL;

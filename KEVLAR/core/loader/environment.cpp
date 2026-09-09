@@ -69,7 +69,7 @@ void Environment::InitializeSystemModules() {
 
     std::vector<KldrEntryInfo> Entries;
     int StubCount = 0;
-    const int MaxStubs = 50;
+    const int MaxStubs = 600;
     int TotalModules = 0;
     const int MaxTotalModules = 100;
 

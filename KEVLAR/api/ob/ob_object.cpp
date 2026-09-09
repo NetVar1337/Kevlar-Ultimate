@@ -1,6 +1,8 @@
 #include "include/common.h"
 #include "ob_object.h"
 #include "api/nt/nt_memory.h"
+#include "core/memory/unicorn_memory.h"
+#include "core/exec/unicorn_engine.h"
 
 uint64_t h_ObfDereferenceObject(PVOID obj) { //TODO
 
@@ -140,6 +142,30 @@ NTSTATUS h_ObReferenceObjectByName(
     if (Object) {
         auto HostObj = UcPtr(Object);
         *HostObj = nullptr;
+
+        HANDLE RegHandle = nullptr;
+        if (Buf && NamedObjectRegistry::Find(Buf, &RegHandle)) {
+            // Return a synthetic KEVLOBJ block (magic + host handle) that our
+            // ZwMapViewOfSection / section paths understand.
+            uint64_t Blk = UnicornMem::AllocateVariable(UnicornEmu::PrimaryEngine, 32, "NamedObjRef");
+            if (Blk) {
+                auto* Host = (uint64_t*)UnicornMem::UcToHost(Blk);
+                if (Host) {
+                    Host[0] = 0x4A56454B424A4FULL; // 'KEVLOBJ\0' little-endian tag
+                    Host[1] = (uint64_t)RegHandle;
+                    Host[2] = 0;
+                    Host[3] = 0;
+                    *HostObj = (PVOID)Blk;
+                    Logger::Log("{GRN}\t-> named-object ref %ls = guest 0x%llx (host handle %p){RESET}\n",
+                        Buf, (unsigned long long)Blk, RegHandle);
+                    return STATUS_SUCCESS;
+                }
+            }
+        }
+        if (Buf && NamedObjectRegistry::IsBlockedEacName(Buf)) {
+            Logger::Log("{YEL}\tObReferenceObjectByName: %ls blocked (live host EAC objects are off-limits){RESET}\n", Buf);
+            return 0xC0000034;
+        }
     }
     return 0xC0000034;
 }
