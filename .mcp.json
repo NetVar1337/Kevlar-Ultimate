@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "kevlar": {
+      "type": "stdio",
+      "command": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python315\\python.exe",
+      "args": [
+        "-m",
+        "kevlar_mcp"
+      ],
+      "cwd": "C:\\Users\\Admin\\Documents\\Kevlar-Ultimate",
+      "env": {
+        "PYTHONPATH": "C:\\Users\\Admin\\Documents\\Kevlar-Ultimate\\mcp"
+      }
+    }
+  }
+}
