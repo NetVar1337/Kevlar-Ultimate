@@ -33,6 +33,7 @@
 #include "api/rtl/rtl_hash.h"
 #include "core/debug/dbg_print.h"
 #include "core/hardware/hardware_runtime.h"
+#include "api/ke/ke_etw.h"
 
 // Bounded ACPI/PCI/IOMMU model: synthetic PCI config space + a guest-resident
 // VT-d DMAR table describing one DRHD unit at 0xFED90000 (mapped in MmMapIoSpaceEx).
@@ -581,4 +582,8 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("HalGetBusDataByOffset", h_HalGetBusDataByOffset);
     Provider::AddFuncImpl("HalAcpiGetTableEx", h_HalAcpiGetTableEx);
     Provider::AddFuncImpl("DbgSetDebugPrintCallback", h_DbgSetDebugPrintCallback);
+    Provider::AddFuncImpl("EtwRegister", h_EtwRegister);
+    Provider::AddFuncImpl("EtwUnregister", h_EtwUnregister);
+    Provider::AddFuncImpl("EtwWrite", h_EtwWrite);
+    Provider::AddFuncImpl("EtwWriteTransfer", h_EtwWriteTransfer);
 }

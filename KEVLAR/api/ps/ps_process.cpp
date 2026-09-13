@@ -11,6 +11,9 @@ _ETHREAD* h_KeGetCurrentThread();
 
 static std::mutex FakeProcessLock;
 static std::unordered_map<uint64_t, uint64_t> FakeProcessMap;
+static std::unordered_map<uint64_t, std::string> g_PidNameMap;
+static std::mutex g_PidNameLock;
+
 
 namespace {
 
@@ -143,6 +146,11 @@ NTSTATUS RemoveSimpleCallback(std::vector<uint64_t>& Callbacks, PVOID Function,
 }
 
 }
+void PsCallbacks::RegisterPidName(uint64_t Pid, const std::string& Name) {
+    std::lock_guard<std::mutex> Guard(g_PidNameLock);
+    g_PidNameMap[Pid] = Name;
+}
+
 
 PVOID h_PsGetProcessWow64Process(_EPROCESS* Process) {
     auto HostProc = UcPtr(Process);
@@ -276,7 +284,18 @@ NTSTATUS h_PsLookupProcessByProcessId(HANDLE ProcessId, _EPROCESS** Process) {
     *EprocProtection(HostEproc) = 0;
     *EprocWow64Process(HostEproc) = nullptr;
     EprocCreateTime(HostEproc)->QuadPart = GetTickCount64();
-    memcpy(EprocImageFileName(HostEproc), "svchost.exe", 12);
+    {
+        std::lock_guard<std::mutex> Guard(g_PidNameLock);
+        auto It = g_PidNameMap.find(Pid);
+        if (It != g_PidNameMap.end()) {
+            const std::string& MappedName = It->second;
+            size_t Len = MappedName.size() > 15 ? 15 : MappedName.size();
+            memcpy(EprocImageFileName(HostEproc), MappedName.c_str(), Len);
+            EprocImageFileName(HostEproc)[Len] = '\0';
+        } else {
+            memcpy(EprocImageFileName(HostEproc), "svchost.exe", 12);
+        }
+    }
     uint64_t ProcWlhUcAddr = UcAddr + offsetof(_EPROCESS, Pcb.Header.WaitListHead);
     HostEproc->Pcb.Header.WaitListHead.Flink = (PLIST_ENTRY)ProcWlhUcAddr;
     HostEproc->Pcb.Header.WaitListHead.Blink = (PLIST_ENTRY)ProcWlhUcAddr;

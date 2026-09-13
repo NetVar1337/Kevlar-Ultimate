@@ -106,24 +106,43 @@ bool ObRegistrationPrecedes(const ObRegistration& Left, const ObRegistration& Ri
 }
 
 }
+static std::unordered_map<uint64_t, int32_t> g_ObRefCount;
+static std::mutex g_ObRefCountLock;
 
-uint64_t h_ObfDereferenceObject(PVOID obj) { //TODO
 
+uint64_t h_ObfDereferenceObject(PVOID obj) {
+    if (!obj)
+        return 0;
+    uint64_t Addr = (uint64_t)(uintptr_t)obj;
+    {
+        std::lock_guard<std::mutex> Guard(g_ObRefCountLock);
+        auto It = g_ObRefCount.find(Addr);
+        if (It != g_ObRefCount.end()) {
+            It->second--;
+            if (It->second <= 0) {
+                Logger::Log("{YEL}[ObRef] ObfDereferenceObject: object 0x%llx refcount reached 0 -- would be freed{RESET}\n", Addr);
+                g_ObRefCount.erase(It);
+            }
+        }
+    }
     return 0;
 }
+
 
 LONG_PTR h_ObfReferenceObject(PVOID Object) {
     if (!Object)
         return -1;
-    if (Object == (PVOID)EPROCESS_BASE_UC) {
-        Logger::Log("{GRY}\tIncreasing ref by 1{RESET}\n");
-        return (LONG_PTR)EPROCESS_BASE_UC;
-    } else {
-        Logger::Log("{RED}\tFailed - {RESET}");
-        Logger::Log("{RED}%llx{RESET}\n", Object);
+    uint64_t Addr = (uint64_t)(uintptr_t)Object;
+    {
+        std::lock_guard<std::mutex> Guard(g_ObRefCountLock);
+        g_ObRefCount[Addr]++;
     }
-
-    return 0;
+    if (Object == (PVOID)EPROCESS_BASE_UC) {
+        Logger::Log("{GRY}\tObfReferenceObject: EPROCESS 0x%llx refcount bumped{RESET}\n", Addr);
+        return (LONG_PTR)EPROCESS_BASE_UC;
+    }
+    Logger::Log("{GRY}\tObfReferenceObject: object 0x%llx refcount bumped{RESET}\n", Addr);
+    return (LONG_PTR)Object;
 }
 
 NTSTATUS h_ObOpenObjectByPointer(PVOID Object, ULONG HandleAttributes, PVOID PassedAccessState, ACCESS_MASK DesiredAccess, uint64_t ObjectType,

@@ -179,11 +179,49 @@ static bool IsCallInstructionBefore(uint8_t* HostBase, uint64_t ModSize, uint32_
     return false;
 }
 
+// Forward declaration — defined after ScanStackForReturnAddress.
+static uint64_t SumUnwindStackAdjust(UNWIND_INFO_HEADER* UnwindInfo, UNWIND_CODE* Codes);
+
 static bool ScanStackForReturnAddress(uc_engine* Uc, uint64_t StartRsp, uint64_t* OutAddr, uint64_t* OutNewRsp) {
     uint64_t FallbackAddr = 0;
     uint64_t FallbackRsp = 0;
     uint64_t Rip = 0;
     uc_reg_read(Uc, UC_X86_REG_RIP, &Rip);
+
+    // --- PDATA-guided fast path ---
+    // Look up the current RIP in its module's exception directory to derive the
+    // return-address slot directly from UNWIND_INFO codes. This avoids the O(N)
+    // linear scan for frames with well-formed PDATA. Falls through on any failure.
+    do {
+        uint64_t RipUcBase = 0, RipModSize = 0;
+        uint8_t* RipHostBase = nullptr;
+        if (!FindModuleForAddress(Rip, RipUcBase, RipModSize, &RipHostBase))
+            break;
+
+        uint32_t RipRva = (uint32_t)(Rip - RipUcBase);
+        RUNTIME_FUNCTION_ENTRY* RtFunc =
+            SehDispatch::FindRuntimeFunction(RipHostBase, RipModSize, RipRva);
+        if (!RtFunc)
+            break;
+
+        auto* UnwindInfo = (UNWIND_INFO_HEADER*)(RipHostBase + RtFunc->UnwindInfoAddress);
+        auto* Codes      = (UNWIND_CODE*)(UnwindInfo + 1);
+
+        uint64_t FrameSize  = SumUnwindStackAdjust(UnwindInfo, Codes);
+        uint64_t RetAddrLoc = StartRsp + FrameSize;
+
+        uint64_t FastRetAddr = 0;
+        if (uc_mem_read(Uc, RetAddrLoc, &FastRetAddr, 8) != UC_ERR_OK)
+            break;
+
+        if (!IsValidCodeAddress(FastRetAddr))
+            break;
+
+        *OutAddr   = FastRetAddr;
+        *OutNewRsp = RetAddrLoc + 8;
+        return true;
+    } while (false);
+    // --- end PDATA fast path; fall through to linear scan ---
 
     for (uint64_t Offset = 0; Offset < 0x20000; Offset += 8) {
         uint64_t Candidate = 0;
@@ -804,4 +842,12 @@ bool SehDispatch::CompleteFilterDispatch(uc_engine* Uc) {
 
 bool SehDispatch::IsPendingFilterDispatch() {
     return PendingFilter.Active;
+}
+
+void SehDispatch::InitializeThread() {
+    // Must be called at thread creation for every worker thread.
+    // SehDispatch::Initialize() only resets the calling thread's copy of the
+    // thread_local PendingFilter; each new thread must call InitializeThread()
+    // during its startup to ensure PendingFilter.Active begins as false.
+    PendingFilter.Active = false;
 }

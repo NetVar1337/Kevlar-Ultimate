@@ -110,7 +110,14 @@ void UnicornEmu::BuildSentinelIat(PEFile* Module) {
             uint64_t SentinelAddr = 0;
             CountTotal++;
 
-            if (Provider::function_providers.contains(FuncNameStr)) {
+            // Data exports (variables like PsLoadedModuleList) must have the
+            // IAT slot hold the variable's address, not a function sentinel.
+            // The driver does `mov rcx,[IAT]; mov rbx,[rcx]` — pointing the
+            // slot at a code stub makes it read the stub's bytes (INT3 fill).
+            if (Provider::data_providers.contains(FuncNameStr)) {
+                SentinelAddr = (uint64_t)Provider::data_providers[FuncNameStr];
+                CountProvider++;
+            } else if (Provider::function_providers.contains(FuncNameStr)) {
                 SentinelAddr = AllocateSentinel(FuncName, Provider::function_providers[FuncNameStr], false, DllName);
                 CountProvider++;
             } else {

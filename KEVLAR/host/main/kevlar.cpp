@@ -48,16 +48,22 @@
 #include "api/ke/ke_sync.h"
 #include "api/ke/ke_timer.h"
 #include "api/ke/ke_event.h"
+#include "core/coverage/edge_coverage.h"
 
 static bool NoPause = false;
 static bool TargetCompatEnabled = false;
 static bool EacServiceEmu = false;
+static std::string AflBitmapPath;
+static std::string CoverageBasePath;
+static std::string CoverageOutPath;
 
 // advapi32 SDDL API (declared here to avoid windows.h include-order churn)
 extern "C" BOOL WINAPI ConvertStringSecurityDescriptorToSecurityDescriptorW(
     LPCWSTR StringSecurityDescriptor, DWORD StringSDRevision,
     PSECURITY_DESCRIPTOR* SecurityDescriptor, PVOID* SecurityDescriptorSize);
 static bool SelfTest = false;
+bool g_EosServerPipeEnabled = false;
+std::unordered_map<uint32_t, uint32_t> g_StatusOverrides;
 
 // Host-level selftest for the ke_* semantics: exercises IRQL, APC queue/delivery,
 // DPC queue and timer cancel/periodic directly against the built environment.
@@ -250,7 +256,7 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --modreads               Enable module read logging{RESET}\n");
         Logger::Log("  --intel                 (no-op) coherent Intel CPU profile is always active{RESET}\n");
         Logger::Log("  --seed <n>              Deterministic seed for TSC jitter (default fixed){RESET}\n");
-        Logger::Log("  --vgk-override          Override STATUS_ACCESS_DENIED from vgk DriverEntry{RESET}\n");
+        Logger::Log("  --vgk-override          Alias: adds 0xC0000022->0 and 0xC000007A->0 to the status override map{RESET}\n");
         Logger::Log("  --devirt                Enable devirtualization testing{RESET}\n");
         Logger::Log("  --strict-exports        Unhandled exports return STATUS_NOT_IMPLEMENTED instead of 0{RESET}\n");
         Logger::Log("  --provenance            Trace branch decisions + API results for rejection paths{RESET}\n");
@@ -270,6 +276,11 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --profile-json <file>  Load a validated build-profile override{RESET}\n");
         Logger::Log("  --selftest              Run the ke_* semantics self-test and exit (no driver){RESET}\n");
         Logger::Log("  --module <path>          Map an additional companion kernel module{RESET}\n");
+        Logger::Log("  --afl-bitmap <file>     Write 65536-byte AFL coverage bitmap after emulation{RESET}\n");
+        Logger::Log("  --coverage-out <file>   Persist edge coverage snapshot after emulation{RESET}\n");
+        Logger::Log("  --coverage-base <file>  Load baseline snapshot; report new edges vs baseline{RESET}\n");
+        Logger::Log("  --eos-pipe              Create real named pipe for EOS_AntiCheat_Server NtCreateFile calls{RESET}\n");
+        Logger::Log("  --override-status <from>=<to>  Override NTSTATUS after DriverEntry (hex, repeatable; e.g. 0xC0000022=0x0){RESET}\n");
     };
 
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
@@ -303,14 +314,16 @@ int main(int Argc, char* Argv[]) {
     bool VtilRequested = false;
     std::string ClientScript;
     int ClientDelay = 120;
+    std::string JsonOutPath;
 
     std::vector<std::string> AdditionalModules;
     for (int I = 1; I < Argc; I++) {
         std::string Arg = Argv[I];
         if (Arg.rfind("--", 0) == 0) {
             if (Arg == "--vgk-override") {
-                UnicornEmu::VgkErrorOverrideEnabled = true;
-                Logger::Log("{CYN}VGK error override ENABLED (STATUS_ACCESS_DENIED -> STATUS_SUCCESS){RESET}\n");
+                g_StatusOverrides[0xC0000022u] = 0;
+                g_StatusOverrides[0xC000007Au] = 0;
+                Logger::Log("{CYN}VGK override: added 0xC0000022->0 and 0xC000007A->0 to status override map{RESET}\n");
             } else if (Arg == "--diag") {
                 UnicornEmu::DiagnosticHooksEnabled = true;
                 Logger::Log("{YEL}Diagnostic hooks ENABLED (slow mode){RESET}\n");
@@ -454,6 +467,14 @@ int main(int Argc, char* Argv[]) {
                 Logger::Log("{CYN}Worker deep-mode: extended emulation loop for worker threads{RESET}\n");
             } else if (Arg == "--eac-service-emu") {
                 EacServiceEmu = true;
+            } else if (Arg.rfind("--json-out", 0) == 0) {
+                std::string Val = (Arg.size() > 10 && Arg[10] == '=')
+                    ? Arg.substr(11) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--json-out requires a file path{RESET}\n");
+                    return 1;
+                }
+                JsonOutPath = std::move(Val);
             } else if (Arg == "--no-target-compat") {
                 TargetCompatEnabled = false;
             } else if (Arg == "--inject-hypervideo") {
@@ -474,11 +495,53 @@ int main(int Argc, char* Argv[]) {
                     Logger::Log("{RED}--max-insns requires a value{RESET}\n");
                     return 1;
                 }
+            } else if (Arg.rfind("--afl-bitmap", 0) == 0) {
+                std::string Val = (Arg.size() > 12 && Arg[12] == '=')
+                    ? Arg.substr(13) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) { Logger::Log("{RED}--afl-bitmap requires a file path{RESET}\n"); return 1; }
+                AflBitmapPath = std::move(Val);
+            } else if (Arg.rfind("--coverage-base", 0) == 0) {
+                std::string Val = (Arg.size() > 15 && Arg[15] == '=')
+                    ? Arg.substr(16) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) { Logger::Log("{RED}--coverage-base requires a file path{RESET}\n"); return 1; }
+                CoverageBasePath = std::move(Val);
+            } else if (Arg.rfind("--coverage-out", 0) == 0) {
+                std::string Val = (Arg.size() > 14 && Arg[14] == '=')
+                    ? Arg.substr(15) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) { Logger::Log("{RED}--coverage-out requires a file path{RESET}\n"); return 1; }
+                CoverageOutPath = std::move(Val);
+            } else if (Arg.rfind("--pid-map", 0) == 0) {
+                std::string Val = (Arg.size() > 9 && Arg[9] == '=') ? Arg.substr(10) : (I+1<Argc?Argv[++I]:"");
+                auto Eq = Val.find('=');
+                if (Eq == std::string::npos) { Logger::Log("{RED}--pid-map requires pid=name{RESET}\n"); return 1; }
+                uint64_t Pid = strtoull(Val.c_str(), nullptr, 0);
+                std::string Name = Val.substr(Eq + 1);
+                PsCallbacks::RegisterPidName(Pid, Name);
+                Logger::Log("{CYN}--pid-map: PID %llu -> %s{RESET}\n", Pid, Name.c_str());
             } else if (Arg == "--selftest") {
                 SelfTest = true;
             } else if (Arg == "--pause")
             {
                system("pause");
+            } else if (Arg == "--eos-pipe") {
+                g_EosServerPipeEnabled = true;
+                Logger::Log("{CYN}EOS AntiCheat_Server pipe emulation ENABLED{RESET}\n");
+            } else if (Arg.rfind("--override-status", 0) == 0) {
+                std::string Val = (Arg.size() > 17 && Arg[17] == '=')
+                    ? Arg.substr(18) : (I + 1 < Argc ? Argv[++I] : "");
+                if (Val.empty()) {
+                    Logger::Log("{RED}--override-status requires <from>=<to> (e.g. 0xC0000022=0x0){RESET}\n");
+                    return 1;
+                }
+                auto Sep = Val.find('=');
+                if (Sep == std::string::npos) {
+                    Logger::Log("{RED}--override-status: expected <from>=<to>, got: %s{RESET}\n", Val.c_str());
+                    return 1;
+                }
+                uint32_t From = (uint32_t)strtoul(Val.substr(0, Sep).c_str(), nullptr, 0);
+                uint32_t To   = (uint32_t)strtoul(Val.substr(Sep + 1).c_str(), nullptr, 0);
+                g_StatusOverrides[From] = To;
+                Logger::Log("{CYN}[STATUS OVERRIDE] registered: 0x%08x -> 0x%08x{RESET}\n", From, To);
             } else {
                 Logger::Log("{RED}Unknown option: %s{RESET}\n", Arg.c_str());
                 PrintUsage(Argv[0]);
@@ -552,10 +615,11 @@ int main(int Argc, char* Argv[]) {
         return 1;
     }
 
-    Logger::Log("{CYN}[ARGS] driver=%s diag=%d vgk_override=%d{RESET}\n",
+    Logger::Log("{CYN}[ARGS] driver=%s diag=%d overrides=%zu eos_pipe=%d{RESET}\n",
         DriverPath.c_str(),
         UnicornEmu::DiagnosticHooksEnabled ? 1 : 0,
-        UnicornEmu::VgkErrorOverrideEnabled ? 1 : 0);
+        g_StatusOverrides.size(),
+        g_EosServerPipeEnabled ? 1 : 0);
 
     Logger::Log("{GRY}Opening File...{RESET}");
 
@@ -848,6 +912,43 @@ int main(int Argc, char* Argv[]) {
     bool Result = UnicornEmu::StartEmulation(
         UnicornEmu::PrimaryEngine, DRIVER_BASE_UC + MainModule->GetEP(), DllMainMode);
 
+    if (!g_StatusOverrides.empty()) {
+        uint64_t Rax = 0;
+        uc_reg_read(UnicornEmu::PrimaryEngine, UC_X86_REG_RAX, &Rax);
+        auto It = g_StatusOverrides.find((uint32_t)Rax);
+        if (It != g_StatusOverrides.end()) {
+            Logger::Log("{GRN}[STATUS OVERRIDE] 0x%08x -> 0x%08x{RESET}\n", It->first, It->second);
+            uint64_t NewRax = It->second;
+            uc_reg_write(UnicornEmu::PrimaryEngine, UC_X86_REG_RAX, &NewRax);
+            if (It->second == 0) Result = true;
+        }
+    }
+
+    if (Kevlar::Coverage::g_EdgeCoverage) {
+        if (!AflBitmapPath.empty()) {
+            if (!Kevlar::Coverage::g_EdgeCoverage->WriteBitmap(AflBitmapPath))
+                Logger::Log("{RED}Coverage: failed to write AFL bitmap to %s{RESET}\n", AflBitmapPath.c_str());
+            else
+                Logger::Log("{GRN}Coverage: AFL bitmap written to %s{RESET}\n", AflBitmapPath.c_str());
+        }
+        if (!CoverageOutPath.empty()) {
+            if (!Kevlar::Coverage::g_EdgeCoverage->SaveSnapshot(CoverageOutPath))
+                Logger::Log("{RED}Coverage: failed to save snapshot to %s{RESET}\n", CoverageOutPath.c_str());
+            else
+                Logger::Log("{GRN}Coverage: snapshot saved to %s{RESET}\n", CoverageOutPath.c_str());
+        }
+        if (!CoverageBasePath.empty()) {
+            auto Base = Kevlar::Coverage::EdgeCoverage::LoadSnapshot(CoverageBasePath);
+            if (Base) {
+                auto NewEdges = Kevlar::Coverage::g_EdgeCoverage->NewEdgesComparedTo(*Base);
+                Logger::Log("{CYN}Coverage: %zu new edges vs baseline %s{RESET}\n",
+                    NewEdges.size(), CoverageBasePath.c_str());
+            } else {
+                Logger::Log("{RED}Coverage: failed to load baseline from %s{RESET}\n", CoverageBasePath.c_str());
+            }
+        }
+    }
+
 
     {
         auto GuestDriver = reinterpret_cast<_DRIVER_OBJECT*>(
@@ -883,6 +984,9 @@ int main(int Argc, char* Argv[]) {
         Logger::Log(DllMainMode
             ? "{RED}DllMain failed or was stopped{RESET}\n"
             : "{RED}DriverEntry failed or was stopped{RESET}\n");
+
+    if (!JsonOutPath.empty() && DiagCenter::Instance().IsEnabled())
+        DiagCenter::Instance().DumpJson(JsonOutPath);
 
     if (!ClientScript.empty()) {
         std::string ScriptCopy = ClientScript;

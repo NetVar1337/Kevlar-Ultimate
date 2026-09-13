@@ -70,6 +70,7 @@ void h_KeClearEvent(_KEVENT* Event) {
 NTSTATUS h_KeWaitForSingleObject(PVOID Object, void* WaitReason, void* WaitMode, BOOLEAN Alertable, PLARGE_INTEGER Timeout) {
 
     DeliverPendingApcs();   // kernel APCs deliver at PASSIVE waits
+    KevlarAssertIrql("KeWaitForSingleObject", 1);
 
     auto Handle = HandleManager::GetHandle((uintptr_t)Object);
     if (!Handle) {

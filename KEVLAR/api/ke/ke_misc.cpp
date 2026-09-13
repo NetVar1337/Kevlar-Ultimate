@@ -169,6 +169,14 @@ UCHAR h_KeRaiseIrql(UCHAR NewIrql) { return h_KfRaiseIrql(NewIrql); }
 void h_KeLowerIrql(UCHAR NewIrql) { KeSetCurrentIrqlRaw(NewIrql); }
 void h_KfLowerIrql(UCHAR NewIrql) { KeSetCurrentIrqlRaw(NewIrql); }
 
+void KevlarAssertIrql(const char* FuncName, UCHAR MaxIrql) {
+    UCHAR Current = (UCHAR)KeGetCurrentIrqlRaw();
+    if (Current > MaxIrql) {
+        Logger::Log("{RED}[IRQL] %s called at IRQL %u (max allowed %u) -- potential bugcheck{RESET}\n",
+            FuncName, (unsigned)Current, (unsigned)MaxIrql);
+    }
+}
+
 // --- APC model ---
 // Host-side per-thread queue. KeGetCurrentThread returns &FakeKernelThread for the
 // primary thread and Ctx->EthreadHostPtr for workers, so APCs key on those pointers.

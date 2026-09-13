@@ -19,3 +19,6 @@ void h_KeLeaveCriticalRegionThread(_KTHREAD* A1);
 void h_KeInitializeSemaphore(PVOID Semaphore, LONG Count, LONG Limit);
 LONG h_KeReleaseSemaphore(PVOID Semaphore, LONG Increment, LONG Adjustment, BOOLEAN Wait);
 void h_KeCapturePersistentThreadState(PVOID Thread, ULONG BugCheckCode, ULONG BugCheckParameter1, ULONG BugCheckParameter2, ULONG BugCheckParameter3, ULONG BugCheckParameter4, PVOID Context);
+NTSTATUS h_KeWaitForMultipleObjects(ULONG Count, PVOID Object[], uint32_t WaitType,
+    _KWAIT_REASON WaitReason, uint32_t WaitMode, BOOLEAN Alertable,
+    PLARGE_INTEGER Timeout, _KWAIT_BLOCK* WaitBlockArray);

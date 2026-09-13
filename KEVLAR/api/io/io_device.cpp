@@ -4,6 +4,9 @@
 #include "core/process/unicorn_threading.h"
 #include "core/io/io_manager.h"
 #include <algorithm>
+#include <unordered_map>
+#include <mutex>
+#include "api/nt/nt_memory.h"
 
 NTSTATUS h_ZwClose(HANDLE Handle);
 
@@ -39,6 +42,9 @@ namespace DeviceTracker {
         return Devices.size();
     }
 }
+
+static std::unordered_map<std::wstring, std::wstring> g_SymlinkMap;
+static std::mutex g_SymlinkLock;
 
 namespace {
 
@@ -213,6 +219,12 @@ NTSTATUS h_IoDeleteSymbolicLink(PUNICODE_STRING SymbolicLinkName) {
 
     Logger::Log("{CYN}\tIoDeleteSymbolicLink: %ls{RESET}\n", LocalSymName.Buffer);
 
+    std::wstring SymStr(LocalSymName.Buffer, LocalSymName.Length / sizeof(wchar_t));
+    {
+        std::lock_guard<std::mutex> Guard(g_SymlinkLock);
+        g_SymlinkMap.erase(SymStr);
+    }
+
     memset(&ObjectAttributes.Attributes + 1, 0, 20);
     LinkHandle = 0;
     ObjectAttributes.RootDirectory = 0;
@@ -232,18 +244,29 @@ NTSTATUS h_IoDeleteSymbolicLink(PUNICODE_STRING SymbolicLinkName) {
     return TemporaryObject;
 }
 
-//todo impl
+
 NTSTATUS h_IoCreateSymbolicLink(PUNICODE_STRING SymbolicLinkName, PUNICODE_STRING DeviceName) {
     auto HostSym = UcPtr(SymbolicLinkName);
     auto HostDev = UcPtr(DeviceName);
     auto HostSymBuf = UcPtr(HostSym->Buffer);
     auto HostDevBuf = UcPtr(HostDev->Buffer);
-    Logger::Log("{CYN}\tSymbolic Link Name : %ls{RESET}\n", HostSymBuf);
-    Logger::Log("{CYN}\tDeviceName : %ls{RESET}\n", HostDevBuf);
+    Logger::Log("{CYN}\tIoCreateSymbolicLink: %ls -> %ls{RESET}\n", HostSymBuf, HostDevBuf);
 
     std::wstring SymStr(HostSymBuf, HostSym->Length / sizeof(wchar_t));
     std::wstring DevStr(HostDevBuf, HostDev->Length / sizeof(wchar_t));
 
+    // Register in the VFS named-object registry so subsequent ObReferenceObjectByName
+    // and ZwOpenSection/ZwOpenEvent lookups can find it.
+    NamedObjectRegistry::Register(SymStr.c_str(), nullptr);
+    Logger::Log("{GRN}\tIoCreateSymbolicLink: registered %ls in NamedObjectRegistry{RESET}\n", SymStr.c_str());
+
+    // Store the symlink→target mapping for IoGetDeviceObjectPointer lookups.
+    {
+        std::lock_guard<std::mutex> Guard(g_SymlinkLock);
+        g_SymlinkMap[SymStr] = DevStr;
+    }
+
+    // Update DeviceTracker with the symbolic link name for the matching device.
     {
         std::lock_guard<std::mutex> Guard(DeviceTracker::DeviceLock);
         for (auto& Dev : DeviceTracker::Devices) {

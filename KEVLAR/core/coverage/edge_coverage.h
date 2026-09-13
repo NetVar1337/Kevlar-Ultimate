@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <cstdio>
 #include <map>
 #include <optional>
 #include <shared_mutex>
@@ -59,10 +60,11 @@ public:
     [[nodiscard]] bool Empty() const;
 
     void Clear();
-    [[nodiscard]] std::size_t Merge(const CoverageSnapshot& Other);
-    [[nodiscard]] CoverageSnapshot Snapshot() const;
-    [[nodiscard]] bool Restore(const CoverageSnapshot& State);
     [[nodiscard]] std::vector<Edge> NewEdgesComparedTo(const CoverageSnapshot& Baseline) const;
+
+    [[nodiscard]] bool WriteBitmap(const std::string& Path) const;
+    [[nodiscard]] bool SaveSnapshot(const std::string& Path) const;
+    [[nodiscard]] static std::optional<CoverageSnapshot> LoadSnapshot(const std::string& Path);
 
     [[nodiscard]] static bool IsValid(const ModuleLocation& Location) noexcept;
     [[nodiscard]] static std::uint64_t StableEdgeId(const Edge& Key) noexcept;
@@ -71,5 +73,8 @@ private:
     mutable std::shared_mutex Mutex_;
     std::map<Edge, std::uint64_t> Edges_;
 };
+
+// Global instance; set by the emulator loop, consumed by the CLI post-run.
+extern EdgeCoverage* g_EdgeCoverage;
 
 } // namespace Kevlar::Coverage

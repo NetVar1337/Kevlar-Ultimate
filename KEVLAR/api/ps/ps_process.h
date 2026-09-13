@@ -36,6 +36,7 @@ size_t ProcessCallbackCount();
 size_t ThreadCallbackCount();
 size_t ImageCallbackCount();
 
+void RegisterPidName(uint64_t Pid, const std::string& Name);
 }
 
 PVOID h_PsGetProcessWow64Process(_EPROCESS* Process);
@@ -71,3 +72,7 @@ NTSTATUS h_PsResumeProcess(void* Process);
 void* h_PsGetProcessSectionBaseAddress(void* Process);
 NTSTATUS h_PsGetProcessExitStatus(void* Process);
 void* h_PsGetProcessWin32Process(void* Process);
+
+// Forward declarations also in ob_object.h; repeated here for ps-adjacent callers.
+LONG_PTR h_ObfReferenceObject(PVOID Object);
+uint64_t h_ObfDereferenceObject(PVOID Object);

@@ -40,33 +40,33 @@ DiagCenter::~DiagCenter() {}
 
 void DiagCenter::Initialize() {
     mEnabled = true;
-    mSeq = 0;
-    mSehRingIdx = 0; mSehCount = 0;
-    mMemProbeRingIdx = 0; mMemProbeCount = 0;
-    mPeProbeRingIdx = 0; mPeProbeCount = 0;
-    mStackRejectIdx = 0; mStackRejectCount = 0;
-    mStackAcceptIdx = 0; mStackAcceptCount = 0;
-    mHvspRingIdx = 0; mHvspCount = 0;
-    mKusdRingIdx = 0; mKusdCount = 0;
-    mBootEnvIdx = 0; mBootEnvCount = 0;
-    mCiRingIdx = 0; mCiCount = 0;
-    mFwRingIdx = 0; mFwCount = 0;
-    mCpuidRingIdx = 0; mCpuidCount = 0;
-    mModQueryIdx = 0; mModQueryCount = 0;
-    mDrvSelfIdx = 0; mDrvSelfCount = 0;
-    mNtosRingIdx = 0; mNtosCount = 0;
-    mUnmappedIdx = 0; mUnmappedCount = 0;
-    mConsistencyIdx = 0; mConsistencyCount = 0;
+    mSeq.store(0, std::memory_order_relaxed);
+    mSehRingIdx.store(0, std::memory_order_relaxed); mSehCount.store(0, std::memory_order_relaxed);
+    mMemProbeRingIdx.store(0, std::memory_order_relaxed); mMemProbeCount.store(0, std::memory_order_relaxed);
+    mPeProbeRingIdx.store(0, std::memory_order_relaxed); mPeProbeCount.store(0, std::memory_order_relaxed);
+    mStackRejectIdx.store(0, std::memory_order_relaxed); mStackRejectCount.store(0, std::memory_order_relaxed);
+    mStackAcceptIdx.store(0, std::memory_order_relaxed); mStackAcceptCount.store(0, std::memory_order_relaxed);
+    mHvspRingIdx.store(0, std::memory_order_relaxed); mHvspCount.store(0, std::memory_order_relaxed);
+    mKusdRingIdx.store(0, std::memory_order_relaxed); mKusdCount.store(0, std::memory_order_relaxed);
+    mBootEnvIdx.store(0, std::memory_order_relaxed); mBootEnvCount.store(0, std::memory_order_relaxed);
+    mCiRingIdx.store(0, std::memory_order_relaxed); mCiCount.store(0, std::memory_order_relaxed);
+    mFwRingIdx.store(0, std::memory_order_relaxed); mFwCount.store(0, std::memory_order_relaxed);
+    mCpuidRingIdx.store(0, std::memory_order_relaxed); mCpuidCount.store(0, std::memory_order_relaxed);
+    mModQueryIdx.store(0, std::memory_order_relaxed); mModQueryCount.store(0, std::memory_order_relaxed);
+    mDrvSelfIdx.store(0, std::memory_order_relaxed); mDrvSelfCount.store(0, std::memory_order_relaxed);
+    mNtosRingIdx.store(0, std::memory_order_relaxed); mNtosCount.store(0, std::memory_order_relaxed);
+    mUnmappedIdx.store(0, std::memory_order_relaxed); mUnmappedCount.store(0, std::memory_order_relaxed);
+    mConsistencyIdx.store(0, std::memory_order_relaxed); mConsistencyCount.store(0, std::memory_order_relaxed);
     Logger::Log("{GRN}DiagCenter initialized{RESET}\n");
 }
 
 void DiagCenter::Shutdown() {
     mEnabled = false;
-    Logger::Log("{CYN}DiagCenter shut down (total seq=%llu){RESET}\n", (unsigned long long)mSeq);
+    Logger::Log("{CYN}DiagCenter shut down (total seq=%llu){RESET}\n", (unsigned long long)mSeq.load(std::memory_order_relaxed));
 }
 
 uint64_t DiagCenter::NextSeq() {
-    return ++mSeq;
+    return mSeq.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 bool DiagCenter::IsEnabled() const {
@@ -74,115 +74,99 @@ bool DiagCenter::IsEnabled() const {
 }
 
 void DiagCenter::RecordSeh(const SehEvent& E) {
-    uint32_t Idx = mSehRingIdx % SEH_RING_SIZE;
+    uint32_t Idx = mSehRingIdx.fetch_add(1, std::memory_order_relaxed) % SEH_RING_SIZE;
     mSehRing[Idx] = E;
-    mSehRingIdx++;
-    mSehCount++;
+    mSehCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordMemProbe(const MemProbeEvent& E) {
-    uint32_t Idx = mMemProbeRingIdx % MEMPROBE_RING_SIZE;
+    uint32_t Idx = mMemProbeRingIdx.fetch_add(1, std::memory_order_relaxed) % MEMPROBE_RING_SIZE;
     mMemProbeRing[Idx] = E;
-    mMemProbeRingIdx++;
-    mMemProbeCount++;
+    mMemProbeCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordPeProbe(const PeProbeEvent& E) {
-    uint32_t Idx = mPeProbeRingIdx % PEPROBE_RING_SIZE;
+    uint32_t Idx = mPeProbeRingIdx.fetch_add(1, std::memory_order_relaxed) % PEPROBE_RING_SIZE;
     mPeProbeRing[Idx] = E;
-    mPeProbeRingIdx++;
-    mPeProbeCount++;
+    mPeProbeCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordStackReject(const StackRejectEvent& E) {
-    uint32_t Idx = mStackRejectIdx % STACK_REJECT_RING_SIZE;
+    uint32_t Idx = mStackRejectIdx.fetch_add(1, std::memory_order_relaxed) % STACK_REJECT_RING_SIZE;
     mStackRejectRing[Idx] = E;
-    mStackRejectIdx++;
-    mStackRejectCount++;
+    mStackRejectCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordStackAccept(const StackAcceptEvent& E) {
-    uint32_t Idx = mStackAcceptIdx % STACK_ACCEPT_RING_SIZE;
+    uint32_t Idx = mStackAcceptIdx.fetch_add(1, std::memory_order_relaxed) % STACK_ACCEPT_RING_SIZE;
     mStackAcceptRing[Idx] = E;
-    mStackAcceptIdx++;
-    mStackAcceptCount++;
+    mStackAcceptCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordHvspRead(const HvspReadEvent& E) {
-    uint32_t Idx = mHvspRingIdx % HVSP_RING_SIZE;
+    uint32_t Idx = mHvspRingIdx.fetch_add(1, std::memory_order_relaxed) % HVSP_RING_SIZE;
     mHvspRing[Idx] = E;
-    mHvspRingIdx++;
-    mHvspCount++;
+    mHvspCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordKusdRead(const KusdReadEvent& E) {
-    uint32_t Idx = mKusdRingIdx % KUSD_RING_SIZE;
+    uint32_t Idx = mKusdRingIdx.fetch_add(1, std::memory_order_relaxed) % KUSD_RING_SIZE;
     mKusdRing[Idx] = E;
-    mKusdRingIdx++;
-    mKusdCount++;
+    mKusdCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordBootEnvRead(const BootEnvReadEvent& E) {
-    uint32_t Idx = mBootEnvIdx % BOOTENV_RING_SIZE;
+    uint32_t Idx = mBootEnvIdx.fetch_add(1, std::memory_order_relaxed) % BOOTENV_RING_SIZE;
     mBootEnvRing[Idx] = E;
-    mBootEnvIdx++;
-    mBootEnvCount++;
+    mBootEnvCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordCiRead(const CiReadEvent& E) {
-    uint32_t Idx = mCiRingIdx % CI_RING_SIZE;
+    uint32_t Idx = mCiRingIdx.fetch_add(1, std::memory_order_relaxed) % CI_RING_SIZE;
     mCiRing[Idx] = E;
-    mCiRingIdx++;
-    mCiCount++;
+    mCiCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordFirmwareQuery(const FirmwareQueryEvent& E) {
-    uint32_t Idx = mFwRingIdx % FW_RING_SIZE;
+    uint32_t Idx = mFwRingIdx.fetch_add(1, std::memory_order_relaxed) % FW_RING_SIZE;
     mFwRing[Idx] = E;
-    mFwRingIdx++;
-    mFwCount++;
+    mFwCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordCpuid(const CpuidEvent& E) {
-    uint32_t Idx = mCpuidRingIdx % CPUID_RING_SIZE;
+    uint32_t Idx = mCpuidRingIdx.fetch_add(1, std::memory_order_relaxed) % CPUID_RING_SIZE;
     mCpuidRing[Idx] = E;
-    mCpuidRingIdx++;
-    mCpuidCount++;
+    mCpuidCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordModuleQuery(const ModuleQueryEvent& E) {
-    uint32_t Idx = mModQueryIdx % MODULE_QUERY_RING_SIZE;
+    uint32_t Idx = mModQueryIdx.fetch_add(1, std::memory_order_relaxed) % MODULE_QUERY_RING_SIZE;
     mModQueryRing[Idx] = E;
-    mModQueryIdx++;
-    mModQueryCount++;
+    mModQueryCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordDrvSelfRead(const DrvSelfReadEvent& E) {
-    uint32_t Idx = mDrvSelfIdx % DRV_SELF_RING_SIZE;
+    uint32_t Idx = mDrvSelfIdx.fetch_add(1, std::memory_order_relaxed) % DRV_SELF_RING_SIZE;
     mDrvSelfRing[Idx] = E;
-    mDrvSelfIdx++;
-    mDrvSelfCount++;
+    mDrvSelfCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordNtosRead(const NtosReadEvent& E) {
-    uint32_t Idx = mNtosRingIdx % NTOS_RING_SIZE;
+    uint32_t Idx = mNtosRingIdx.fetch_add(1, std::memory_order_relaxed) % NTOS_RING_SIZE;
     mNtosRing[Idx] = E;
-    mNtosRingIdx++;
-    mNtosCount++;
+    mNtosCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordUnmappedRead(const UnmappedReadEvent& E) {
-    uint32_t Idx = mUnmappedIdx % UNMAPPED_RING_SIZE;
+    uint32_t Idx = mUnmappedIdx.fetch_add(1, std::memory_order_relaxed) % UNMAPPED_RING_SIZE;
     mUnmappedRing[Idx] = E;
-    mUnmappedIdx++;
-    mUnmappedCount++;
+    mUnmappedCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 void DiagCenter::RecordConsistency(const ConsistencyEvent& E) {
-    uint32_t Idx = mConsistencyIdx % CONSISTENCY_RING_SIZE;
+    uint32_t Idx = mConsistencyIdx.fetch_add(1, std::memory_order_relaxed) % CONSISTENCY_RING_SIZE;
     mConsistencyRing[Idx] = E;
-    mConsistencyIdx++;
-    mConsistencyCount++;
+    mConsistencyCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 static const char* AccessTypeName(DiagAccessType T) {
@@ -291,9 +275,11 @@ static const char* CpuidLeafName(uint32_t Leaf) {
 }
 
 void DiagCenter::DumpSehEvents() {
-    Logger::Log("{MAG}=== SEH Events (%u total, ring %u) ==={RESET}\n", mSehCount, mSehRingIdx);
-    uint32_t Count = (mSehCount < SEH_RING_SIZE) ? mSehCount : SEH_RING_SIZE;
-    uint32_t Start = (mSehCount < SEH_RING_SIZE) ? 0 : (mSehRingIdx % SEH_RING_SIZE);
+    uint32_t CurCount = mSehCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mSehRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{MAG}=== SEH Events (%u total, ring %u) ==={RESET}\n", CurCount, CurIdx);
+    uint32_t Count = (CurCount < SEH_RING_SIZE) ? CurCount : SEH_RING_SIZE;
+    uint32_t Start = (CurCount < SEH_RING_SIZE) ? 0 : (CurIdx % SEH_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % SEH_RING_SIZE;
         auto& E = mSehRing[Idx];
@@ -320,9 +306,11 @@ void DiagCenter::DumpSehEvents() {
 }
 
 void DiagCenter::DumpStackRejectEvents() {
-    Logger::Log("{YEL}=== Stack Reject Events (%u total) ==={RESET}\n", mStackRejectCount);
-    uint32_t Count = (mStackRejectCount < STACK_REJECT_RING_SIZE) ? mStackRejectCount : STACK_REJECT_RING_SIZE;
-    uint32_t Start = (mStackRejectCount < STACK_REJECT_RING_SIZE) ? 0 : (mStackRejectIdx % STACK_REJECT_RING_SIZE);
+    uint32_t CurCount = mStackRejectCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mStackRejectIdx.load(std::memory_order_relaxed);
+    Logger::Log("{YEL}=== Stack Reject Events (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < STACK_REJECT_RING_SIZE) ? CurCount : STACK_REJECT_RING_SIZE;
+    uint32_t Start = (CurCount < STACK_REJECT_RING_SIZE) ? 0 : (CurIdx % STACK_REJECT_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % STACK_REJECT_RING_SIZE;
         auto& E = mStackRejectRing[Idx];
@@ -334,9 +322,11 @@ void DiagCenter::DumpStackRejectEvents() {
 }
 
 void DiagCenter::DumpStackAcceptEvents() {
-    Logger::Log("{GRN}=== Stack Accept Events (%u total) ==={RESET}\n", mStackAcceptCount);
-    uint32_t Count = (mStackAcceptCount < STACK_ACCEPT_RING_SIZE) ? mStackAcceptCount : STACK_ACCEPT_RING_SIZE;
-    uint32_t Start = (mStackAcceptCount < STACK_ACCEPT_RING_SIZE) ? 0 : (mStackAcceptIdx % STACK_ACCEPT_RING_SIZE);
+    uint32_t CurCount = mStackAcceptCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mStackAcceptIdx.load(std::memory_order_relaxed);
+    Logger::Log("{GRN}=== Stack Accept Events (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < STACK_ACCEPT_RING_SIZE) ? CurCount : STACK_ACCEPT_RING_SIZE;
+    uint32_t Start = (CurCount < STACK_ACCEPT_RING_SIZE) ? 0 : (CurIdx % STACK_ACCEPT_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % STACK_ACCEPT_RING_SIZE;
         auto& E = mStackAcceptRing[Idx];
@@ -348,9 +338,11 @@ void DiagCenter::DumpStackAcceptEvents() {
 }
 
 void DiagCenter::DumpHvspReads() {
-    Logger::Log("{CYN}=== HV Shared Page Reads (%u total) ==={RESET}\n", mHvspCount);
-    uint32_t Count = (mHvspCount < HVSP_RING_SIZE) ? mHvspCount : HVSP_RING_SIZE;
-    uint32_t Start = (mHvspCount < HVSP_RING_SIZE) ? 0 : (mHvspRingIdx % HVSP_RING_SIZE);
+    uint32_t CurCount = mHvspCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mHvspRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== HV Shared Page Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < HVSP_RING_SIZE) ? CurCount : HVSP_RING_SIZE;
+    uint32_t Start = (CurCount < HVSP_RING_SIZE) ? 0 : (CurIdx % HVSP_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % HVSP_RING_SIZE;
         auto& E = mHvspRing[Idx];
@@ -362,9 +354,11 @@ void DiagCenter::DumpHvspReads() {
 }
 
 void DiagCenter::DumpBootEnvReads() {
-    Logger::Log("{CYN}=== Boot Env Reads (%u total) ==={RESET}\n", mBootEnvCount);
-    uint32_t Count = (mBootEnvCount < BOOTENV_RING_SIZE) ? mBootEnvCount : BOOTENV_RING_SIZE;
-    uint32_t Start = (mBootEnvCount < BOOTENV_RING_SIZE) ? 0 : (mBootEnvIdx % BOOTENV_RING_SIZE);
+    uint32_t CurCount = mBootEnvCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mBootEnvIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== Boot Env Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < BOOTENV_RING_SIZE) ? CurCount : BOOTENV_RING_SIZE;
+    uint32_t Start = (CurCount < BOOTENV_RING_SIZE) ? 0 : (CurIdx % BOOTENV_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % BOOTENV_RING_SIZE;
         auto& E = mBootEnvRing[Idx];
@@ -376,9 +370,11 @@ void DiagCenter::DumpBootEnvReads() {
 }
 
 void DiagCenter::DumpCiReads() {
-    Logger::Log("{CYN}=== Code Integrity Reads (%u total) ==={RESET}\n", mCiCount);
-    uint32_t Count = (mCiCount < CI_RING_SIZE) ? mCiCount : CI_RING_SIZE;
-    uint32_t Start = (mCiCount < CI_RING_SIZE) ? 0 : (mCiRingIdx % CI_RING_SIZE);
+    uint32_t CurCount = mCiCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mCiRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== Code Integrity Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < CI_RING_SIZE) ? CurCount : CI_RING_SIZE;
+    uint32_t Start = (CurCount < CI_RING_SIZE) ? 0 : (CurIdx % CI_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % CI_RING_SIZE;
         auto& E = mCiRing[Idx];
@@ -390,9 +386,11 @@ void DiagCenter::DumpCiReads() {
 }
 
 void DiagCenter::DumpFirmwareQueries() {
-    Logger::Log("{CYN}=== Firmware Queries (%u total) ==={RESET}\n", mFwCount);
-    uint32_t Count = (mFwCount < FW_RING_SIZE) ? mFwCount : FW_RING_SIZE;
-    uint32_t Start = (mFwCount < FW_RING_SIZE) ? 0 : (mFwRingIdx % FW_RING_SIZE);
+    uint32_t CurCount = mFwCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mFwRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== Firmware Queries (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < FW_RING_SIZE) ? CurCount : FW_RING_SIZE;
+    uint32_t Start = (CurCount < FW_RING_SIZE) ? 0 : (CurIdx % FW_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % FW_RING_SIZE;
         auto& E = mFwRing[Idx];
@@ -410,9 +408,11 @@ void DiagCenter::DumpFirmwareQueries() {
 }
 
 void DiagCenter::DumpCpuidEvents() {
-    Logger::Log("{CYN}=== CPUID Events (%u total) ==={RESET}\n", mCpuidCount);
-    uint32_t Count = (mCpuidCount < CPUID_RING_SIZE) ? mCpuidCount : CPUID_RING_SIZE;
-    uint32_t Start = (mCpuidCount < CPUID_RING_SIZE) ? 0 : (mCpuidRingIdx % CPUID_RING_SIZE);
+    uint32_t CurCount = mCpuidCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mCpuidRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== CPUID Events (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < CPUID_RING_SIZE) ? CurCount : CPUID_RING_SIZE;
+    uint32_t Start = (CurCount < CPUID_RING_SIZE) ? 0 : (CurIdx % CPUID_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % CPUID_RING_SIZE;
         auto& E = mCpuidRing[Idx];
@@ -430,9 +430,11 @@ void DiagCenter::DumpCpuidEvents() {
 }
 
 void DiagCenter::DumpModuleQueryEvents() {
-    Logger::Log("{CYN}=== Module Query Events (%u total) ==={RESET}\n", mModQueryCount);
-    uint32_t Count = (mModQueryCount < MODULE_QUERY_RING_SIZE) ? mModQueryCount : MODULE_QUERY_RING_SIZE;
-    uint32_t Start = (mModQueryCount < MODULE_QUERY_RING_SIZE) ? 0 : (mModQueryIdx % MODULE_QUERY_RING_SIZE);
+    uint32_t CurCount = mModQueryCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mModQueryIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== Module Query Events (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < MODULE_QUERY_RING_SIZE) ? CurCount : MODULE_QUERY_RING_SIZE;
+    uint32_t Start = (CurCount < MODULE_QUERY_RING_SIZE) ? 0 : (CurIdx % MODULE_QUERY_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % MODULE_QUERY_RING_SIZE;
         auto& E = mModQueryRing[Idx];
@@ -449,9 +451,11 @@ void DiagCenter::DumpModuleQueryEvents() {
 }
 
 void DiagCenter::DumpDrvSelfReads() {
-    Logger::Log("{CYN}=== Driver Self-Reads (%u total) ==={RESET}\n", mDrvSelfCount);
-    uint32_t Count = (mDrvSelfCount < DRV_SELF_RING_SIZE) ? mDrvSelfCount : DRV_SELF_RING_SIZE;
-    uint32_t Start = (mDrvSelfCount < DRV_SELF_RING_SIZE) ? 0 : (mDrvSelfIdx % DRV_SELF_RING_SIZE);
+    uint32_t CurCount = mDrvSelfCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mDrvSelfIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== Driver Self-Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < DRV_SELF_RING_SIZE) ? CurCount : DRV_SELF_RING_SIZE;
+    uint32_t Start = (CurCount < DRV_SELF_RING_SIZE) ? 0 : (CurIdx % DRV_SELF_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % DRV_SELF_RING_SIZE;
         auto& E = mDrvSelfRing[Idx];
@@ -463,9 +467,11 @@ void DiagCenter::DumpDrvSelfReads() {
 }
 
 void DiagCenter::DumpNtosReads() {
-    Logger::Log("{CYN}=== NTOSKRNL Reads (%u total) ==={RESET}\n", mNtosCount);
-    uint32_t Count = (mNtosCount < NTOS_RING_SIZE) ? mNtosCount : NTOS_RING_SIZE;
-    uint32_t Start = (mNtosCount < NTOS_RING_SIZE) ? 0 : (mNtosRingIdx % NTOS_RING_SIZE);
+    uint32_t CurCount = mNtosCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mNtosRingIdx.load(std::memory_order_relaxed);
+    Logger::Log("{CYN}=== NTOSKRNL Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < NTOS_RING_SIZE) ? CurCount : NTOS_RING_SIZE;
+    uint32_t Start = (CurCount < NTOS_RING_SIZE) ? 0 : (CurIdx % NTOS_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % NTOS_RING_SIZE;
         auto& E = mNtosRing[Idx];
@@ -478,9 +484,11 @@ void DiagCenter::DumpNtosReads() {
 }
 
 void DiagCenter::DumpUnmappedReads() {
-    Logger::Log("{RED}=== Unmapped Reads (%u total) ==={RESET}\n", mUnmappedCount);
-    uint32_t Count = (mUnmappedCount < UNMAPPED_RING_SIZE) ? mUnmappedCount : UNMAPPED_RING_SIZE;
-    uint32_t Start = (mUnmappedCount < UNMAPPED_RING_SIZE) ? 0 : (mUnmappedIdx % UNMAPPED_RING_SIZE);
+    uint32_t CurCount = mUnmappedCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mUnmappedIdx.load(std::memory_order_relaxed);
+    Logger::Log("{RED}=== Unmapped Reads (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < UNMAPPED_RING_SIZE) ? CurCount : UNMAPPED_RING_SIZE;
+    uint32_t Start = (CurCount < UNMAPPED_RING_SIZE) ? 0 : (CurIdx % UNMAPPED_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % UNMAPPED_RING_SIZE;
         auto& E = mUnmappedRing[Idx];
@@ -503,9 +511,11 @@ void DiagCenter::DumpUnmappedReads() {
 }
 
 void DiagCenter::DumpConsistencyReport() {
-    Logger::Log("{MAG}=== Consistency Report (%u total) ==={RESET}\n", mConsistencyCount);
-    uint32_t Count = (mConsistencyCount < CONSISTENCY_RING_SIZE) ? mConsistencyCount : CONSISTENCY_RING_SIZE;
-    uint32_t Start = (mConsistencyCount < CONSISTENCY_RING_SIZE) ? 0 : (mConsistencyIdx % CONSISTENCY_RING_SIZE);
+    uint32_t CurCount = mConsistencyCount.load(std::memory_order_relaxed);
+    uint32_t CurIdx   = mConsistencyIdx.load(std::memory_order_relaxed);
+    Logger::Log("{MAG}=== Consistency Report (%u total) ==={RESET}\n", CurCount);
+    uint32_t Count = (CurCount < CONSISTENCY_RING_SIZE) ? CurCount : CONSISTENCY_RING_SIZE;
+    uint32_t Start = (CurCount < CONSISTENCY_RING_SIZE) ? 0 : (CurIdx % CONSISTENCY_RING_SIZE);
     for (uint32_t I = 0; I < Count; I++) {
         uint32_t Idx = (Start + I) % CONSISTENCY_RING_SIZE;
         auto& E = mConsistencyRing[Idx];
@@ -518,6 +528,149 @@ void DiagCenter::DumpConsistencyReport() {
                 (unsigned long long)E.Va2, E.Rva2);
         }
     }
+}
+
+void DiagCenter::DumpJson(const std::string& Path) const {
+    FILE* F = nullptr;
+    if (fopen_s(&F, Path.c_str(), "wb") != 0 || !F) {
+        Logger::Log("{RED}DumpJson: cannot open %s{RESET}\n", Path.c_str());
+        return;
+    }
+
+    char Buf[512];
+    bool FirstSection = true;
+    fputs("{\n", F);
+
+    // SEH events
+    {
+        uint32_t CurCount = mSehCount.load(std::memory_order_relaxed);
+        if (CurCount > 0) {
+            uint32_t CurIdx = mSehRingIdx.load(std::memory_order_relaxed);
+            uint32_t Count = (CurCount < SEH_RING_SIZE) ? CurCount : SEH_RING_SIZE;
+            uint32_t Start = (CurCount < SEH_RING_SIZE) ? 0 : (CurIdx % SEH_RING_SIZE);
+            if (!FirstSection) fputs(",\n", F);
+            FirstSection = false;
+            fputs("  \"seh\": [\n", F);
+            for (uint32_t I = 0; I < Count; I++) {
+                const auto& E = mSehRing[(Start + I) % SEH_RING_SIZE];
+                snprintf(Buf, sizeof(Buf),
+                    "    {\"seq\":%llu,\"rip\":\"0x%llx\",\"exception_code\":\"0x%08x\",\"fault_address\":\"0x%llx\"}%s\n",
+                    (unsigned long long)E.Base.Sequence,
+                    (unsigned long long)E.Base.Rip,
+                    E.ExceptionCode,
+                    (unsigned long long)E.FaultAddress,
+                    (I + 1 < Count) ? "," : "");
+                fputs(Buf, F);
+            }
+            fputs("  ]", F);
+        }
+    }
+
+    // mem_probes
+    {
+        uint32_t CurCount = mMemProbeCount.load(std::memory_order_relaxed);
+        if (CurCount > 0) {
+            uint32_t CurIdx = mMemProbeRingIdx.load(std::memory_order_relaxed);
+            uint32_t Count = (CurCount < MEMPROBE_RING_SIZE) ? CurCount : MEMPROBE_RING_SIZE;
+            uint32_t Start = (CurCount < MEMPROBE_RING_SIZE) ? 0 : (CurIdx % MEMPROBE_RING_SIZE);
+            if (!FirstSection) fputs(",\n", F);
+            FirstSection = false;
+            fputs("  \"mem_probes\": [\n", F);
+            for (uint32_t I = 0; I < Count; I++) {
+                const auto& E = mMemProbeRing[(Start + I) % MEMPROBE_RING_SIZE];
+                snprintf(Buf, sizeof(Buf),
+                    "    {\"seq\":%llu,\"address\":\"0x%llx\",\"probe_type\":\"%s\",\"value\":\"0x%llx\"}%s\n",
+                    (unsigned long long)E.Base.Sequence,
+                    (unsigned long long)E.Address,
+                    ProbeTypeName(E.ProbeType),
+                    (unsigned long long)E.Value,
+                    (I + 1 < Count) ? "," : "");
+                fputs(Buf, F);
+            }
+            fputs("  ]", F);
+        }
+    }
+
+    // cpuid
+    {
+        uint32_t CurCount = mCpuidCount.load(std::memory_order_relaxed);
+        if (CurCount > 0) {
+            uint32_t CurIdx = mCpuidRingIdx.load(std::memory_order_relaxed);
+            uint32_t Count = (CurCount < CPUID_RING_SIZE) ? CurCount : CPUID_RING_SIZE;
+            uint32_t Start = (CurCount < CPUID_RING_SIZE) ? 0 : (CurIdx % CPUID_RING_SIZE);
+            if (!FirstSection) fputs(",\n", F);
+            FirstSection = false;
+            fputs("  \"cpuid\": [\n", F);
+            for (uint32_t I = 0; I < Count; I++) {
+                const auto& E = mCpuidRing[(Start + I) % CPUID_RING_SIZE];
+                snprintf(Buf, sizeof(Buf),
+                    "    {\"seq\":%llu,\"leaf\":\"0x%x\",\"leaf_name\":\"%s\","
+                    "\"eax\":\"0x%x\",\"ebx\":\"0x%x\",\"ecx\":\"0x%x\",\"edx\":\"0x%x\"}%s\n",
+                    (unsigned long long)E.Base.Sequence,
+                    E.Leaf,
+                    E.LeafName,
+                    E.PostEax, E.PostEbx, E.PostEcx, E.PostEdx,
+                    (I + 1 < Count) ? "," : "");
+                fputs(Buf, F);
+            }
+            fputs("  ]", F);
+        }
+    }
+
+    // unmapped_reads
+    {
+        uint32_t CurCount = mUnmappedCount.load(std::memory_order_relaxed);
+        if (CurCount > 0) {
+            uint32_t CurIdx = mUnmappedIdx.load(std::memory_order_relaxed);
+            uint32_t Count = (CurCount < UNMAPPED_RING_SIZE) ? CurCount : UNMAPPED_RING_SIZE;
+            uint32_t Start = (CurCount < UNMAPPED_RING_SIZE) ? 0 : (CurIdx % UNMAPPED_RING_SIZE);
+            if (!FirstSection) fputs(",\n", F);
+            FirstSection = false;
+            fputs("  \"unmapped_reads\": [\n", F);
+            for (uint32_t I = 0; I < Count; I++) {
+                const auto& E = mUnmappedRing[(Start + I) % UNMAPPED_RING_SIZE];
+                snprintf(Buf, sizeof(Buf),
+                    "    {\"seq\":%llu,\"fault_address\":\"0x%llx\"}%s\n",
+                    (unsigned long long)E.Base.Sequence,
+                    (unsigned long long)E.FaultAddress,
+                    (I + 1 < Count) ? "," : "");
+                fputs(Buf, F);
+            }
+            fputs("  ]", F);
+        }
+    }
+
+    // consistency
+    {
+        uint32_t CurCount = mConsistencyCount.load(std::memory_order_relaxed);
+        if (CurCount > 0) {
+            uint32_t CurIdx = mConsistencyIdx.load(std::memory_order_relaxed);
+            uint32_t Count = (CurCount < CONSISTENCY_RING_SIZE) ? CurCount : CONSISTENCY_RING_SIZE;
+            uint32_t Start = (CurCount < CONSISTENCY_RING_SIZE) ? 0 : (CurIdx % CONSISTENCY_RING_SIZE);
+            if (!FirstSection) fputs(",\n", F);
+            FirstSection = false;
+            fputs("  \"consistency\": [\n", F);
+            for (uint32_t I = 0; I < Count; I++) {
+                const auto& E = mConsistencyRing[(Start + I) % CONSISTENCY_RING_SIZE];
+                // Escape CheckName and Message minimally (no quotes or backslashes expected, but be safe)
+                snprintf(Buf, sizeof(Buf),
+                    "    {\"seq\":%llu,\"severity\":\"%s\",\"check\":\"%s\",\"message\":\"%s\"}%s\n",
+                    (unsigned long long)E.Sequence,
+                    SeverityName(E.Severity),
+                    E.CheckName,
+                    E.Message,
+                    (I + 1 < Count) ? "," : "");
+                fputs(Buf, F);
+            }
+            fputs("  ]", F);
+        }
+    }
+
+    if (!FirstSection)
+        fputs("\n", F);
+    fputs("}\n", F);
+    fclose(F);
+    Logger::Log("{GRN}DumpJson written to %s{RESET}\n", Path.c_str());
 }
 
 void DiagCenter::EmitPeProbeHint(uint64_t FaultAddr, uint32_t Offset64k, char* OutBuf, size_t BufSize) {

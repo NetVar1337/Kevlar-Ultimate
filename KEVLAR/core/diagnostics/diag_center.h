@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <atomic>
 #include <string>
 
 enum DiagAccessType {
@@ -320,6 +321,7 @@ public:
     void DumpNtosReads();
     void DumpUnmappedReads();
     void DumpConsistencyReport();
+    void DumpJson(const std::string& path) const;
     void RunConsistencyChecks();
 
     void EmitPeProbeHint(uint64_t faultAddr, uint32_t offset64k, char* outBuf, size_t bufSize);
@@ -367,72 +369,72 @@ private:
     DiagCenter();
     ~DiagCenter();
 
-    uint64_t mSeq;
+    std::atomic<uint64_t> mSeq;
     bool mEnabled;
 
     SehEvent mSehRing[SEH_RING_SIZE];
-    uint32_t mSehRingIdx;
-    uint32_t mSehCount;
+    std::atomic<uint32_t> mSehRingIdx;
+    std::atomic<uint32_t> mSehCount;
 
     MemProbeEvent mMemProbeRing[MEMPROBE_RING_SIZE];
-    uint32_t mMemProbeRingIdx;
-    uint32_t mMemProbeCount;
+    std::atomic<uint32_t> mMemProbeRingIdx;
+    std::atomic<uint32_t> mMemProbeCount;
 
     PeProbeEvent mPeProbeRing[PEPROBE_RING_SIZE];
-    uint32_t mPeProbeRingIdx;
-    uint32_t mPeProbeCount;
+    std::atomic<uint32_t> mPeProbeRingIdx;
+    std::atomic<uint32_t> mPeProbeCount;
 
     StackRejectEvent mStackRejectRing[STACK_REJECT_RING_SIZE];
-    uint32_t mStackRejectIdx;
-    uint32_t mStackRejectCount;
+    std::atomic<uint32_t> mStackRejectIdx;
+    std::atomic<uint32_t> mStackRejectCount;
 
     StackAcceptEvent mStackAcceptRing[STACK_ACCEPT_RING_SIZE];
-    uint32_t mStackAcceptIdx;
-    uint32_t mStackAcceptCount;
+    std::atomic<uint32_t> mStackAcceptIdx;
+    std::atomic<uint32_t> mStackAcceptCount;
 
     HvspReadEvent mHvspRing[HVSP_RING_SIZE];
-    uint32_t mHvspRingIdx;
-    uint32_t mHvspCount;
+    std::atomic<uint32_t> mHvspRingIdx;
+    std::atomic<uint32_t> mHvspCount;
 
     KusdReadEvent mKusdRing[KUSD_RING_SIZE];
-    uint32_t mKusdRingIdx;
-    uint32_t mKusdCount;
+    std::atomic<uint32_t> mKusdRingIdx;
+    std::atomic<uint32_t> mKusdCount;
 
     BootEnvReadEvent mBootEnvRing[BOOTENV_RING_SIZE];
-    uint32_t mBootEnvIdx;
-    uint32_t mBootEnvCount;
+    std::atomic<uint32_t> mBootEnvIdx;
+    std::atomic<uint32_t> mBootEnvCount;
 
     CiReadEvent mCiRing[CI_RING_SIZE];
-    uint32_t mCiRingIdx;
-    uint32_t mCiCount;
+    std::atomic<uint32_t> mCiRingIdx;
+    std::atomic<uint32_t> mCiCount;
 
     FirmwareQueryEvent mFwRing[FW_RING_SIZE];
-    uint32_t mFwRingIdx;
-    uint32_t mFwCount;
+    std::atomic<uint32_t> mFwRingIdx;
+    std::atomic<uint32_t> mFwCount;
 
     CpuidEvent mCpuidRing[CPUID_RING_SIZE];
-    uint32_t mCpuidRingIdx;
-    uint32_t mCpuidCount;
+    std::atomic<uint32_t> mCpuidRingIdx;
+    std::atomic<uint32_t> mCpuidCount;
 
     ModuleQueryEvent mModQueryRing[MODULE_QUERY_RING_SIZE];
-    uint32_t mModQueryIdx;
-    uint32_t mModQueryCount;
+    std::atomic<uint32_t> mModQueryIdx;
+    std::atomic<uint32_t> mModQueryCount;
 
     DrvSelfReadEvent mDrvSelfRing[DRV_SELF_RING_SIZE];
-    uint32_t mDrvSelfIdx;
-    uint32_t mDrvSelfCount;
+    std::atomic<uint32_t> mDrvSelfIdx;
+    std::atomic<uint32_t> mDrvSelfCount;
 
     NtosReadEvent mNtosRing[NTOS_RING_SIZE];
-    uint32_t mNtosRingIdx;
-    uint32_t mNtosCount;
+    std::atomic<uint32_t> mNtosRingIdx;
+    std::atomic<uint32_t> mNtosCount;
 
     UnmappedReadEvent mUnmappedRing[UNMAPPED_RING_SIZE];
-    uint32_t mUnmappedIdx;
-    uint32_t mUnmappedCount;
+    std::atomic<uint32_t> mUnmappedIdx;
+    std::atomic<uint32_t> mUnmappedCount;
 
     ConsistencyEvent mConsistencyRing[CONSISTENCY_RING_SIZE];
-    uint32_t mConsistencyIdx;
-    uint32_t mConsistencyCount;
+    std::atomic<uint32_t> mConsistencyIdx;
+    std::atomic<uint32_t> mConsistencyCount;
 
     char mFmtBuf[512];
 };

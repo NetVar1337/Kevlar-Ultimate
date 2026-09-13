@@ -83,5 +83,6 @@ uint32_t IntNoToExceptionCode(uint32_t IntNo);
 
 bool CompleteFilterDispatch(uc_engine* Uc);
 bool IsPendingFilterDispatch();
+void InitializeThread();
 
 }

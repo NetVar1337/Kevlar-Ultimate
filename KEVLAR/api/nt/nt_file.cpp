@@ -2,6 +2,7 @@
 #include "core/registry/virtual_fs.h"
 #include "core/object/handle_manager.h"
 #include "nt_memory.h"
+extern bool g_EosServerPipeEnabled;
 
 NTSTATUS h_NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes, PVOID IoStatusBlock,
     PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength) {
@@ -12,6 +13,32 @@ NTSTATUS h_NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, OBJECT_AT
 
     const wchar_t* PathStr = LocalOa.ObjectName ? LocalOa.ObjectName->Buffer : nullptr;
     Logger::Log("  {YEL}ZwCreateFile: {WHT}%ls{RESET}\n", PathStr ? PathStr : L"(null)");
+    if (g_EosServerPipeEnabled && PathStr) {
+        std::wstring EosCheck(PathStr);
+        for (auto& C : EosCheck) C = (wchar_t)towlower(C);
+        if (EosCheck.find(L"eos_anticheat_server") != std::wstring::npos) {
+            Logger::Log("  {CYN}EOS pipe: intercepted NtCreateFile for %ls{RESET}\n", PathStr);
+            wchar_t PipeName[128];
+            swprintf_s(PipeName, L"\\\\.\\pipe\\KEVLAR_EOS_AntiCheat_%u", GetCurrentProcessId());
+            HANDLE PipeH = CreateNamedPipeW(
+                PipeName,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1, 4096, 4096, 0, nullptr);
+            if (PipeH != INVALID_HANDLE_VALUE) {
+                NamedObjectRegistry::Register(PathStr, PipeH);
+                *HostHandle = PipeH;
+                if (HostIsb) {
+                    auto Isb = (_IO_STATUS_BLOCK*)HostIsb;
+                    Isb->Status = 0;
+                    Isb->Information = 2;
+                }
+                Logger::Log("  {GRN}EOS pipe: created %ls -> handle %p{RESET}\n", PipeName, PipeH);
+                return STATUS_SUCCESS;
+            }
+            Logger::Log("  {RED}EOS pipe: CreateNamedPipe failed (err=%u), falling through{RESET}\n", GetLastError());
+        }
+    }
 
     std::wstring LocalPath = PathStr ? VirtualFs::NtPathToLocalW(PathStr) : L"";
 

@@ -55,6 +55,9 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_
             if (StoppedRip != SENTINEL_RET_ADDR) {
                 Logger::Log("{YEL}DriverEntry instruction limit (%llu) reached at RIP=0x%llx{RESET}\n",
                     InstructionLimit, StoppedRip);
+                std::string StopDisasm = DisassembleAt(Uc, StoppedRip);
+                if (!StopDisasm.empty())
+                    Logger::Log("{YEL}  stopped at: %s{RESET}\n", StopDisasm.c_str());
                 R.Ok = false;
                 return R;
             }
@@ -101,46 +104,54 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMain
 
     Logger::Log("{CYN}Starting emulation at 0x%llx (until 0x%llx){RESET}\n", EntryPoint, SENTINEL_RET_ADDR);
 
-    static volatile bool HeartbeatRunning = true;
-    static uc_engine* HeartbeatUc = Uc;
-    HANDLE HeartbeatThread = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-        LARGE_INTEGER Freq, Start;
-        QueryPerformanceFrequency(&Freq);
-        QueryPerformanceCounter(&Start);
-        while (HeartbeatRunning) {
+    struct HeartbeatCtx {
+        volatile bool Running;
+        uc_engine* Uc;
+        LARGE_INTEGER Freq;
+        LARGE_INTEGER Start;
+    };
+    HeartbeatCtx Hbx = { true, Uc, {}, {} };
+    QueryPerformanceFrequency(&Hbx.Freq);
+    QueryPerformanceCounter(&Hbx.Start);
+    HANDLE HeartbeatThread = CreateThread(nullptr, 0, [](LPVOID P) -> DWORD {
+        auto* Ctx = (HeartbeatCtx*)P;
+        static bool PtDetected = false;
+        int LastPtReport = -1;
+        while (Ctx->Running) {
             Sleep(5000);
-            if (!HeartbeatRunning) break;
+            if (!Ctx->Running) break;
             UnicornEmu::UpdateKusdTimeValues();
             uint64_t Rip = 0;
-            uc_reg_read(HeartbeatUc, UC_X86_REG_RIP, &Rip);
+            uc_reg_read(Ctx->Uc, UC_X86_REG_RIP, &Rip);
             LARGE_INTEGER Now;
             QueryPerformanceCounter(&Now);
-            double Elapsed = (double)(Now.QuadPart - Start.QuadPart) / (double)Freq.QuadPart;
+            double Elapsed = (double)(Now.QuadPart - Ctx->Start.QuadPart) / (double)Ctx->Freq.QuadPart;
             uint64_t DriverRva = (Rip >= DRIVER_BASE_UC) ? (Rip - DRIVER_BASE_UC) : 0;
             Logger::Log("{GRY}[HEARTBEAT %.1fs] RIP=0x%llx (drv+0x%llx){RESET}\n", Elapsed, Rip, DriverRva);
 
             if (IntelCpuSpoofEnabled) {
-                static bool PtDetected = false;
                 uint32_t PtMsrs[] = { 0x570, 0x571, 0x572, 0x560, 0x561, 0x580, 0x581, 0x582, 0x583 };
                 const char* PtNames[] = { "RTIT_CTL", "RTIT_STATUS", "RTIT_CR3_MATCH", "RTIT_OUTPUT_BASE", "RTIT_OUTPUT_MASK", "RTIT_ADDR0_A", "RTIT_ADDR0_B", "RTIT_ADDR1_A", "RTIT_ADDR1_B" };
                 for (int I = 0; I < 9; I++) {
                     uc_x86_msr MsrVal = {};
                     MsrVal.rid = PtMsrs[I];
                     MsrVal.value = 0;
-                    uc_reg_read(HeartbeatUc, UC_X86_REG_MSR, &MsrVal);
+                    uc_reg_read(Ctx->Uc, UC_X86_REG_MSR, &MsrVal);
                     if (MsrVal.value != 0) {
                         Logger::Log("{RED}[INTEL PT] MSR 0x%x (%s) = 0x%llx *** PT ACTIVE ***{RESET}\n",
                             PtMsrs[I], PtNames[I], MsrVal.value);
                         PtDetected = true;
                     }
                 }
-                if (!PtDetected && ((int)Elapsed % 30 == 0)) {
+                int Bucket = (int)Elapsed / 30;
+                if (!PtDetected && Bucket != LastPtReport) {
+                    LastPtReport = Bucket;
                     Logger::Log("{GRY}[INTEL PT] No PT MSR activity at %.0fs{RESET}\n", Elapsed);
                 }
             }
         }
         return 0;
-    }, nullptr, 0, nullptr);
+    }, &Hbx, 0, nullptr);
 
     auto LoopResult = RunEmulationLoop(Uc, EntryPoint, UnicornEmu::ExecutionInstructionLimit);
     if (LoopResult.HostCrash) {
@@ -155,7 +166,7 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMain
     if (!LoopResult.Ok)
         return false;
 
-    HeartbeatRunning = false;
+    Hbx.Running = false;
     WaitForSingleObject(HeartbeatThread, 1000);
     CloseHandle(HeartbeatThread);
 
