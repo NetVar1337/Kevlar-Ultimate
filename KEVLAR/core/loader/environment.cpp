@@ -261,6 +261,13 @@ void Environment::InitializeSystemModules() {
 
         TrackedEntry->DllBase = (PVOID)KldrEntry.DllBase;
 
+        for (auto& Mod : UnicornEmu::MappedSysMods) {
+            if (Mod.UcBase == (uint64_t)KldrEntry.DllBase) {
+                Mod.LoaderEntry = UcAddr;
+                break;
+            }
+        }
+
         UcLdrAddrs.push_back(UcAddr);
     }
 
@@ -383,6 +390,12 @@ bool Environment::AddModuleFromFile(
 
     Entry->SectionPointer = reinterpret_cast<PVOID>(EntryUc);
     environment_module[ModuleBase] = *Entry;
+    for (auto& Mod : UnicornEmu::MappedSysMods) {
+        if (Mod.UcBase == ModuleBase) {
+            Mod.LoaderEntry = EntryUc;
+            break;
+        }
+    }
     Logger::Log("{CYN}Added companion module %s at UC 0x%llx size=0x%x{RESET}\n",
         BaseName.c_str(), ModuleBase, Entry->SizeOfImage);
     return true;

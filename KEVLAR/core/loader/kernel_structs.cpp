@@ -180,4 +180,5 @@ void SetupDriverLdrEntry(PEFile* MainModule) {
     }
 
     drvObj.DriverSection = (PVOID)LdrEntryUcAddr;
+    UnicornEmu::DriverLdrEntryUc = LdrEntryUcAddr;
 }

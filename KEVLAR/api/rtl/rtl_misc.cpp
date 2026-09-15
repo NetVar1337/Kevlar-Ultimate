@@ -55,6 +55,54 @@ PIMAGE_NT_HEADERS h_RtlImageNtHeader(PVOID ImageBase) {
     return (PIMAGE_NT_HEADERS)((uint64_t)ImageBase + Dos->e_lfanew);
 }
 
+// RtlPcToFileHeader resolves a control address to the image base of the owning
+// module and, when given a non-NULL BaseOfImage output, to that module's
+// KLDR_DATA_TABLE_ENTRY. The previous passthrough returned NULL for every PC,
+// which made drivers that walk their own loader entry abort early.
+PVOID h_RtlPcToFileHeader(PVOID PcValue, PVOID* BaseOfImage) {
+    auto HostBase = UcPtr(BaseOfImage);
+    if (!HostBase)
+        return nullptr;
+
+    const uint64_t Pc = (uint64_t)PcValue;
+
+    // RtlPcToFileHeader returns the KLDR_DATA_TABLE_ENTRY published into
+    // PsLoadedModuleList for the owning image (or NULL for an unknown PC), and
+    // writes the image base through BaseOfImage.
+    auto LdrEntryFor = [](uint64_t ImageBase) -> PVOID {
+        if (ImageBase == DRIVER_BASE_UC)
+            return (PVOID)UnicornEmu::DriverLdrEntryUc;
+        for (auto& Mod : UnicornEmu::MappedSysMods) {
+            if (Mod.UcBase == ImageBase)
+                return (PVOID)Mod.LoaderEntry;
+        }
+        return nullptr;
+    };
+
+    if (Pc >= DRIVER_BASE_UC && Pc < DRIVER_BASE_UC + 0x10000000ULL) {
+        *HostBase = (PVOID)DRIVER_BASE_UC;
+        PVOID LdrEntry = LdrEntryFor(DRIVER_BASE_UC);
+        Logger::Log("{GRY}\tRtlPcToFileHeader(0x%llx) -> driver base 0x%llx ldr=0x%llx{RESET}\n",
+            Pc, (unsigned long long)DRIVER_BASE_UC, (unsigned long long)(uintptr_t)LdrEntry);
+        return LdrEntry;
+    }
+
+    for (auto& Mod : UnicornEmu::MappedSysMods) {
+        if (Pc >= Mod.UcBase && Pc < Mod.UcBase + Mod.Size) {
+            *HostBase = (PVOID)Mod.UcBase;
+            PVOID LdrEntry = LdrEntryFor(Mod.UcBase);
+            Logger::Log("{GRY}\tRtlPcToFileHeader(0x%llx) -> %s base 0x%llx ldr=0x%llx{RESET}\n",
+                Pc, Mod.Name.c_str(), (unsigned long long)Mod.UcBase,
+                (unsigned long long)(uintptr_t)LdrEntry);
+            return LdrEntry;
+        }
+    }
+
+    *HostBase = nullptr;
+    Logger::Log("{RED}\tRtlPcToFileHeader(0x%llx): no owning module{RESET}\n", Pc);
+    return nullptr;
+}
+
 PRUNTIME_FUNCTION h_RtlLookupFunctionEntry(uint64_t ControlPc, uint64_t* ImageBase, PVOID HistoryTable) {
     auto HostImageBase = UcPtr(ImageBase);
     if (ControlPc >= DRIVER_BASE_UC && ControlPc < DRIVER_BASE_UC + 0x10000000ULL) {

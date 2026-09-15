@@ -72,9 +72,14 @@ struct SysModInfo {
     uint64_t Size;
     std::string Name;
     PEFile* Pe;
+    uint64_t LoaderEntry = 0;   // UC address of the published KLDR_DATA_TABLE_ENTRY
 };
 
 extern std::vector<SysModInfo> MappedSysMods;
+
+// UC address of the loaded driver's KLDR_DATA_TABLE_ENTRY (set by
+// SetupDriverLdrEntry); RtlPcToFileHeader returns it for driver PCs.
+extern uint64_t DriverLdrEntryUc;
 
 struct SysModFuncEntry {
     uint64_t UcBase;
