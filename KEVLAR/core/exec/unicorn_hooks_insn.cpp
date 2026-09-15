@@ -395,7 +395,7 @@ static bool PlatformStatusCaught[256] = {};
 // record where the value first appears and what the immediately-preceding
 // instructions were. Guarded to the single edge so it costs nothing after the hit.
 static bool SentinelOriginCaught[4] = {};
-static const uint32_t SentinelWatched[4] = { 0xd4494e49u, 0x696e6930u, 0xe0000135u, 0x00000000u };
+static const uint32_t SentinelWatched[4] = { 0xd4494e49u, 0x696e6930u, 0x00000135u, 0xc0000001u };
 static uint64_t SentinelPrevRip[6] = {};
 static int SentinelPrevCount = 0;
 void OnRipRingTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
