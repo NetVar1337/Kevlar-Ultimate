@@ -165,6 +165,7 @@ void OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
     void OnEacBufferRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr,
         int Size, int64_t Value, void* UserData);
 void OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+void OnRvaWatch(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnVmStepTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
 void OnProtectedCodeWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
@@ -222,6 +223,7 @@ std::optional<Kevlar::Coverage::ModuleLocation> ResolveCoverageModule(uint64_t U
 void InstallDivWatch(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallSseAlignCheck(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End);
+void InstallRvaWatch(uc_engine* Uc, const uint64_t* Rvas, int Count);
 void InstallStackWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
 void InstallProtectedCodeWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
 void InstallVmStepTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize, uint64_t Trigger, uint32_t Steps);

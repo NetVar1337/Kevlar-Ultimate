@@ -60,6 +60,12 @@ static bool DriverEntryGateBypassEnabled = false;
 // mapped driver image at an RVA once relocation has been applied. Lets a manifest slot
 // the file leaves zero (and the loader would normally fill) be supplied for testing.
 static std::vector<std::pair<uint64_t, uint64_t>> g_Pokes;
+// --watch-rva <rva>[,<rva>...]: log the full register file each time one of these RVAs
+// executes (capped per RVA). Answers "what values does this instruction actually see"
+// without a debugger, which is what a stalled VM loop needs.
+static std::vector<uint64_t> g_WatchRvas;
+static std::vector<int> g_WatchHits;
+static constexpr int kWatchHitCap = 48;
 static std::string AflBitmapPath;
 static std::string CoverageBasePath;
 static std::string CoverageOutPath;
@@ -486,6 +492,21 @@ int main(int Argc, char* Argv[]) {
                 g_Pokes.emplace_back(PokeRva, PokeVal);
                 Logger::Log("{CYN}Poke queued: drv+0x%llx = 0x%llx{RESET}\n",
                     (unsigned long long)PokeRva, (unsigned long long)PokeVal);
+            } else if (Arg.rfind("--watch-rva", 0) == 0) {
+                std::string Val = (Arg.size() > 11 && Arg[11] == '=')
+                    ? Arg.substr(12) : (I + 1 < Argc ? Argv[++I] : "");
+                size_t Start = 0;
+                while (Start <= Val.size()) {
+                    const size_t Comma = Val.find(',', Start);
+                    const std::string Piece = Val.substr(Start, Comma == std::string::npos ? std::string::npos : Comma - Start);
+                    if (!Piece.empty()) {
+                        g_WatchRvas.push_back(strtoull(Piece.c_str(), nullptr, 0));
+                        g_WatchHits.push_back(0);
+                    }
+                    if (Comma == std::string::npos) break;
+                    Start = Comma + 1;
+                }
+                Logger::Log("{CYN}Watch queued for %zu RVA(s){RESET}\n", g_WatchRvas.size());
             } else if (Arg == "--no-pause") {
                 NoPause = true;
             } else if (Arg == "--workers-deep") {
@@ -893,6 +914,10 @@ int main(int Argc, char* Argv[]) {
     }
 
     UnicornEmu::InstallWatchpoints(UnicornEmu::PrimaryEngine, MainModule);
+    if (!g_WatchRvas.empty()) {
+        UnicornEmu::InstallRvaWatch(UnicornEmu::PrimaryEngine, g_WatchRvas.data(),
+            (int)g_WatchRvas.size());
+    }
     if (FaceitTarget && TargetCompatEnabled) {
         TargetCompat::InstallFaceitAc20260908(
             UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());

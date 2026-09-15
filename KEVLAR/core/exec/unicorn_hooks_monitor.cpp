@@ -336,6 +336,66 @@ void UnicornEmu::Hooks::OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Si
     }
 }
 
+// --- RVA register watch ------------------------------------------------------
+// Logs the full register file every time one of the watched RVAs executes. This is
+// the general "what does this instruction actually see" probe: it is what identifies
+// the host state a stalled VM loop is polling, without a debugger.
+static uint64_t RvaWatchList[16] = {};
+static int RvaWatchCount = 0;
+static int RvaWatchHits[16] = {};
+static constexpr int kRvaWatchHitCap = 48;
+
+void UnicornEmu::Hooks::OnRvaWatch(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    const uint64_t Rva = (Addr >= DRIVER_BASE_UC) ? (Addr - DRIVER_BASE_UC) : Addr;
+    for (int I = 0; I < RvaWatchCount; ++I) {
+        if (RvaWatchList[I] != Rva)
+            continue;
+        if (RvaWatchHits[I] >= kRvaWatchHitCap) {
+            if (RvaWatchHits[I] == kRvaWatchHitCap) {
+                ++RvaWatchHits[I];
+                Logger::Log("{YEL}[WATCH] drv+0x%llx: hit cap reached, muting{RESET}\n",
+                    (unsigned long long)Rva);
+            }
+            return;
+        }
+        const int Hit = ++RvaWatchHits[I];
+        uint64_t V[16] = {};
+        const int Regs[16] = { UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
+                               UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_R8, UC_X86_REG_R9,
+                               UC_X86_REG_R10, UC_X86_REG_R11, UC_X86_REG_R12, UC_X86_REG_R13,
+                               UC_X86_REG_R14, UC_X86_REG_R15, UC_X86_REG_RSP, UC_X86_REG_RBP };
+        for (int K = 0; K < 16; ++K)
+            uc_reg_read(Uc, Regs[K], &V[K]);
+        uint64_t Rflags = 0;
+        uc_reg_read(Uc, UC_X86_REG_RFLAGS, &Rflags);
+        Logger::Log("{MAG}[WATCH %d] drv+0x%llx %s{RESET}\n", Hit, (unsigned long long)Rva,
+            UnicornEmu::DisassembleAt(Uc, Addr).c_str());
+        Logger::Log("{GRY}    RAX=%016llx RBX=%016llx RCX=%016llx RDX=%016llx{RESET}\n",
+            V[0], V[1], V[2], V[3]);
+        Logger::Log("{GRY}    RSI=%016llx RDI=%016llx R8 =%016llx R9 =%016llx{RESET}\n",
+            V[4], V[5], V[6], V[7]);
+        Logger::Log("{GRY}    R10=%016llx R11=%016llx R12=%016llx R13=%016llx{RESET}\n",
+            V[8], V[9], V[10], V[11]);
+        Logger::Log("{GRY}    R14=%016llx R15=%016llx RSP=%016llx RBP=%016llx RFLAGS=%016llx{RESET}\n",
+            V[12], V[13], V[14], V[15], Rflags);
+        return;
+    }
+}
+
+void UnicornEmu::InstallRvaWatch(uc_engine* Uc, const uint64_t* Rvas, int Count) {
+    RvaWatchCount = 0;
+    for (int I = 0; I < Count && I < 16; ++I) {
+        RvaWatchList[I] = Rvas[I];
+        RvaWatchHits[I] = 0;
+        ++RvaWatchCount;
+    }
+    uc_hook Hh;
+    uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)Hooks::OnRvaWatch, nullptr,
+        DRIVER_BASE_UC, DRIVER_BASE_UC + 0x10000000ULL - 1);
+    Logger::Log("{CYN}RVA watch installed for %d address(es), cap %d each{RESET}\n",
+        RvaWatchCount, kRvaWatchHitCap);
+}
+
 void UnicornEmu::InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End) {
     FocusedTraceCount = 0;
     VmContextBase = 0;
