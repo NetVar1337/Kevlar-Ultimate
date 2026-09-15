@@ -104,20 +104,38 @@ uint64_t UnicornEmu::MapKernelStructs() {
         }
         memset(LockArrayScratch, 0, 0x1000);
 
-        // VGK's entry stub reads gs:[0x28], then uses `[gs:[0x28]+0x68]+8` as a
-        // control address: it resolves that address with RtlPcToFileHeader and
-        // writes its "0ini" tag at +4. Seed that slot with a PC inside the loaded
-        // driver image (base + 0x1000 - 8, so the derived pointer is the .text
-        // start) — a resolvable, mapped kernel address instead of the unaligned
-        // lock-array alias or NULL that faulted.
+        // gs:[0x28]+0x68 is the per-CPU lock the driver's VM dispatcher spins on:
+        // .grfn1 does `rcx = [[gs:[0x28]+0x68]+0x18]; lock cmpxchg [rcx], ...` and
+        // loops until the compare-exchange succeeds, i.e. it is acquiring a spin lock
+        // whose pointer comes from this slot. Seeding the slot with a PC inside the
+        // driver image (an earlier guess at the entry stub's `RtlPcToFileHeader`
+        // argument) put a *nonzero* value in that lock word, so the acquire could never
+        // succeed and the VM livelocked. Point it at dedicated zeroed, writable kernel
+        // memory instead: the lock is free (0 == unowned), the acquire succeeds, and the
+        // derived pointer is a valid mapped kernel address.
         {
-            uint64_t TaggedModule = (DRIVER_BASE_UC + 0x1000) - 8;
-            memcpy((uint8_t*)LockArrayScratch + 0x68, &TaggedModule, sizeof(TaggedModule));
+            uint64_t LockWord = KPCR_LOCK_QUEUE_UC;
+            memcpy((uint8_t*)LockArrayScratch + 0x68, &LockWord, sizeof(LockWord));
         }
     }
     if (!uc_mem_map_ptr(PrimaryEngine, KPCR_LOCK_ARRAY_UC, 0x1000, UC_PROT_ALL, LockArrayScratch)) {
         UnicornMem::TrackExisting(KPCR_LOCK_ARRAY_UC, LockArrayScratch, 0x1000, "KPCR.LockArray");
         MappedRegions.push_back({ KPCR_LOCK_ARRAY_UC, 0x1000, LockArrayScratch, "KPCR.LockArray", UC_PROT_ALL });
+    }
+
+    // Zeroed writable page backing the per-CPU lock at gs:[0x28]+0x68. Writes from the
+    // driver reach the host buffer directly, so the lock state stays consistent.
+    if (!LockWordScratch) {
+        LockWordScratch = _aligned_malloc(0x1000, 0x1000);
+        if (!LockWordScratch) {
+            Logger::Log("{RED}Failed to allocate per-CPU lock page{RESET}\n");
+            return 1;
+        }
+        memset(LockWordScratch, 0, 0x1000);
+    }
+    if (!uc_mem_map_ptr(PrimaryEngine, KPCR_LOCK_QUEUE_UC, 0x1000, UC_PROT_ALL, LockWordScratch)) {
+        UnicornMem::TrackExisting(KPCR_LOCK_QUEUE_UC, LockWordScratch, 0x1000, "KPCR.LockWord");
+        MappedRegions.push_back({ KPCR_LOCK_QUEUE_UC, 0x1000, LockWordScratch, "KPCR.LockWord", UC_PROT_ALL });
     }
 
     uint64_t KpcrAddr = KPCR_BASE_UC;

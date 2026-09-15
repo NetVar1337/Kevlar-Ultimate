@@ -21,6 +21,10 @@
 // Dedicated zeroed page published as KPCR.LockArray (gs:[0x28]): a non-NULL per-CPU
 // pointer whose every displacement stays inside mapped, zeroed memory.
 #define KPCR_LOCK_ARRAY_UC    0xFFFFF80200090000ULL
+// Zeroed, writable kernel page used as the per-CPU lock the VM dispatcher acquires via
+// gs:[0x28]+0x68. Kept separate from the LockArray page so driver writes to the lock do
+// not collide with the scratch slot the entry stub reads.
+#define KPCR_LOCK_QUEUE_UC    0xFFFFF802000A0000ULL
 #define KPRCB_BASE_UC         0xFFFFF80200010000ULL
 #define ETHREAD_BASE_UC       0xFFFFF80200020000ULL
 #define EPROCESS_BASE_UC      0xFFFFF80200030000ULL

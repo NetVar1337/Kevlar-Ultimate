@@ -75,6 +75,7 @@ void* GdtMemory = nullptr;
 void* IdtMemory = nullptr;
 void* KpcrBlock = nullptr;
 void* LockArrayScratch = nullptr;
+void* LockWordScratch = nullptr;
 void* EthreadBlock = nullptr;
 void* EprocessBlock = nullptr;
 void* DrvObjBlock = nullptr;
@@ -207,6 +208,11 @@ void UnicornEmu::Shutdown() {
     if (LockArrayScratch) {
         _aligned_free(LockArrayScratch);
         LockArrayScratch = nullptr;
+    }
+
+    if (LockWordScratch) {
+        _aligned_free(LockWordScratch);
+        LockWordScratch = nullptr;
     }
 
     if (EthreadBlock) {
