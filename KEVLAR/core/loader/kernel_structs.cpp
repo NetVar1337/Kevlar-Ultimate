@@ -87,6 +87,13 @@ void PopulateKernelStructs() {
     }
 
     FakeKPCR.CurrentPrcb = (_KPRCB*)(KPCR_BASE_UC + KPCR_PRCB_OFFSET);
+    // Real ntoskrnl publishes a per-CPU spin-lock queue array at KPRCB.LockQueue and
+    // points KPCR.LockArray at it (KiInitializePcrLockQueues). Drivers that acquire a
+    // queued spin lock through gs:[0x28] dereference this pointer, so leaving it NULL
+    // is a synthetic-environment tell. Point it at the synthetic KPRCB's own queue
+    // array, which MapKernelStructs seeds self-referentially.
+    FakeKPCR.LockArray = (_KSPIN_LOCK_QUEUE*)(KPCR_BASE_UC + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue);
+    FakeKPCR.Used_Self = (VOID*)KPCR_BASE_UC;
     FakeKPCR.NtTib.StackBase = (PVOID)(STACK_BASE_UC + STACK_SIZE_UC);
     FakeKPCR.NtTib.StackLimit = (PVOID)STACK_BASE_UC;
     FakeKPCR.MajorVersion = 10;
@@ -173,4 +180,5 @@ void SetupDriverLdrEntry(PEFile* MainModule) {
     }
 
     drvObj.DriverSection = (PVOID)LdrEntryUcAddr;
+    UnicornEmu::DriverLdrEntryUc = LdrEntryUcAddr;
 }

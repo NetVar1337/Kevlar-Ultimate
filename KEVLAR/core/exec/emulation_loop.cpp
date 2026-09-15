@@ -7,10 +7,23 @@
 #include "core/exception/seh_dispatch.h"
 
 
+namespace {
+// Kept out of RunEmulationLoop: MSVC rejects __try in any function that
+// requires C++ object unwinding (C2712), and DisassembleAt returns std::string.
+void LogStoppedInstruction(uc_engine* Uc, uint64_t Rip) {
+    const std::string StopDisasm = UnicornEmu::DisassembleAt(Uc, Rip);
+    if (!StopDisasm.empty())
+        Logger::Log("{YEL}  stopped at: %s{RESET}\n", StopDisasm.c_str());
+}
+} // namespace
+
+
 EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_t InstructionLimit) {
     EmulationLoopResult R = {};
     R.Ok = true;
     uint64_t CurrentEmuRip = EntryPoint;
+    uint64_t StopDisasmRip = 0;
+    bool LimitHit = false;
     UnicornEmu::SseFault.Active = false;
 
     __try {
@@ -55,9 +68,8 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_
             if (StoppedRip != SENTINEL_RET_ADDR) {
                 Logger::Log("{YEL}DriverEntry instruction limit (%llu) reached at RIP=0x%llx{RESET}\n",
                     InstructionLimit, StoppedRip);
-                std::string StopDisasm = DisassembleAt(Uc, StoppedRip);
-                if (!StopDisasm.empty())
-                    Logger::Log("{YEL}  stopped at: %s{RESET}\n", StopDisasm.c_str());
+                StopDisasmRip = StoppedRip;
+                LimitHit = true;
                 R.Ok = false;
                 return R;
             }
@@ -77,6 +89,10 @@ EmulationLoopResult RunEmulationLoop(uc_engine* Uc, uint64_t EntryPoint, uint64_
         uc_reg_read(Uc, UC_X86_REG_R9, &R.CrashR9);
         uc_reg_read(Uc, UC_X86_REG_RBX, &R.CrashRbx);
         R.Ok = false;
+    }
+
+    if (LimitHit) {
+        LogStoppedInstruction(Uc, StopDisasmRip);
     }
 
     return R;
@@ -118,7 +134,10 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMain
         static bool PtDetected = false;
         int LastPtReport = -1;
         while (Ctx->Running) {
-            Sleep(5000);
+            // Interruptible 5s wait: a plain Sleep(5000) would delay every
+            // StopHeartbeat() by up to 5s and let the thread touch a
+            // half-torn-down engine during teardown.
+            for (int Tick = 0; Tick < 50 && Ctx->Running; ++Tick) Sleep(100);
             if (!Ctx->Running) break;
             UnicornEmu::UpdateKusdTimeValues();
             uint64_t Rip = 0;
@@ -154,7 +173,17 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMain
     }, &Hbx, 0, nullptr);
 
     auto LoopResult = RunEmulationLoop(Uc, EntryPoint, UnicornEmu::ExecutionInstructionLimit);
+
+    // Stop the heartbeat before any return path: it dereferences the stack-local
+    // HeartbeatCtx (Hbx) and issues uc_reg_read on a live engine.
+    auto StopHeartbeat = [&]() {
+        Hbx.Running = false;
+        WaitForSingleObject(HeartbeatThread, 5000);
+        CloseHandle(HeartbeatThread);
+    };
+
     if (LoopResult.HostCrash) {
+        StopHeartbeat();
         Logger::Log("{RED}HOST CRASH in primary emulation thread! Exception code: 0x%08x{RESET}\n", LoopResult.ExceptionCode);
         Logger::Log("{RED}  UC RIP=0x%llx (drv+0x%llx) RSP=0x%llx{RESET}\n", LoopResult.CrashRip,
             LoopResult.CrashRip >= DRIVER_BASE_UC ? LoopResult.CrashRip - DRIVER_BASE_UC : 0, LoopResult.CrashRsp);
@@ -163,12 +192,12 @@ bool UnicornEmu::StartEmulation(uc_engine* Uc, uint64_t EntryPoint, bool DllMain
         Logger::Log("{RED}  R8=0x%llx R9=0x%llx{RESET}\n", LoopResult.CrashR8, LoopResult.CrashR9);
         return false;
     }
-    if (!LoopResult.Ok)
+    if (!LoopResult.Ok) {
+        StopHeartbeat();
         return false;
+    }
 
-    Hbx.Running = false;
-    WaitForSingleObject(HeartbeatThread, 1000);
-    CloseHandle(HeartbeatThread);
+    StopHeartbeat();
 
     uint64_t Rax = 0;
     uc_reg_read(Uc, UC_X86_REG_RAX, &Rax);

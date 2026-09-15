@@ -349,6 +349,42 @@ void UnicornEmu::InstallDriverTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t
         DriverBase, DriverBase + DriverSize - 1, TraceInstrMax);
 }
 
+// Map a guest address to a stable module:RVA identity for edge coverage.
+std::optional<Kevlar::Coverage::ModuleLocation> UnicornEmu::ResolveCoverageModule(uint64_t UcAddr) {
+    if (UcAddr >= DRIVER_BASE_UC && UcAddr < DRIVER_BASE_UC + 0x10000000ULL) {
+        return Kevlar::Coverage::ModuleLocation{"driver", UcAddr - DRIVER_BASE_UC};
+    }
+    std::shared_lock<std::shared_mutex> Guard(RegionsLock);
+    for (const auto& Region : MappedRegions) {
+        if (UcAddr >= Region.UcBase && UcAddr < Region.UcBase + Region.Size && !Region.Name.empty()) {
+            return Kevlar::Coverage::ModuleLocation{Region.Name, UcAddr - Region.UcBase};
+        }
+    }
+    return std::nullopt;
+}
+
+// Records a cross-module edge each time control transfers (CALL/RET/JMP) between
+// distinct module:RVA locations. Previous location is tracked per engine in a thread_local.
+void UnicornEmu::Hooks::OnEdgeCoverage(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
+    static thread_local uint64_t PreviousAddr = 0;
+    if (PreviousAddr != 0 && PreviousAddr != Addr) {
+        const auto From = UnicornEmu::ResolveCoverageModule(PreviousAddr);
+        const auto To = UnicornEmu::ResolveCoverageModule(Addr);
+        if (From && To && !(From->Module == To->Module && From->Rva == To->Rva))
+            Kevlar::Coverage::g_EdgeCoverage->Record(*From, *To);
+    }
+    PreviousAddr = Addr;
+}
+
+void UnicornEmu::InstallEdgeCoverage(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize) {
+    static Kevlar::Coverage::EdgeCoverage Coverage;
+    Kevlar::Coverage::g_EdgeCoverage = &Coverage;
+    uc_hook Hh;
+    uc_hook_add(Uc, &Hh, UC_HOOK_BLOCK, (void*)Hooks::OnEdgeCoverage, nullptr,
+        DRIVER_BASE_UC, DRIVER_BASE_UC + 0x10000000ULL - 1);
+    Logger::Log("{CYN}Edge coverage installed{GRY} (hook 0x%llx-0x%llx){RESET}\n",
+        DriverBase, DriverBase + DriverSize - 1);
+}
 static bool RaxErrorCaught = false;
 static uint64_t LastRaxErrorRip = 0;
 static uint64_t LastRaxErrorInsn = 0;

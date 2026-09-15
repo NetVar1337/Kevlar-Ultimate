@@ -456,6 +456,7 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("MmUnlockPages", h_MmUnlockPages);
     Provider::AddFuncImpl("MmBuildMdlForNonPagedPool", h_MmBuildMdlForNonPagedPool);
     Provider::AddFuncImpl("RtlImageNtHeader", h_RtlImageNtHeader);
+    Provider::AddFuncImpl("RtlPcToFileHeader", h_RtlPcToFileHeader);
     Provider::AddFuncImpl("IoCreateNotificationEvent", h_IoCreateNotificationEvent);
     Provider::AddFuncImpl("KeInitializeDpc", h_KeInitializeDpc);
     Provider::AddFuncImpl("KeInsertQueueDpc", h_KeInsertQueueDpc);

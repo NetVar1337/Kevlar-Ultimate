@@ -51,6 +51,7 @@ namespace UnicornEmu {
     std::unordered_map<uint64_t, StubEntry> SentinelMap;
     std::vector<MemoryRegion> MappedRegions;
     std::vector<SysModInfo> MappedSysMods;
+    uint64_t DriverLdrEntryUc = 0;
     std::unordered_map<uint64_t, SysModFuncEntry> SysModFuncCache;
     std::mutex SysModFuncCacheLock;
     std::shared_mutex EngineLock;

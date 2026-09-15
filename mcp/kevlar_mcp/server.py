@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
-from mcp.server.fastmcp import Context
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
