@@ -1,8 +1,11 @@
 #include "core/devirt/vtil_analysis.h"
 #include <windows.h>
 #include <Logger/Logger.h>
+#include <algorithm>
+#include <fstream>
 #include <string>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -34,13 +37,58 @@ bool VtilAnalysis::LiftImageRegion(const uint8_t* image, size_t imageSize, const
     auto slash = host.find_last_of(L"\\/");
     host = host.substr(0, slash + 1) + L"kevlar-vtil-host.ps1";
 
+    // The lifter consumes an image that is addressable by RVA, but the on-disk file
+    // layout is section-aligned differently (and the PE header spans the first
+    // SizeOfHeaders bytes), so lifting the raw file at an RVA decodes the wrong
+    // bytes for any RVA outside the header. Materialize a copy with each section
+    // written at its virtual address and lift that instead.
+    std::wstring staged = host.substr(0, slash + 1) + L"kevlar-vtil-image.bin";
+    {
+        std::ofstream out(staged, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            Logger::Log("{RED}VTIL: cannot stage mapped image{RESET}\n");
+            return false;
+        }
+        std::vector<uint8_t> mapped(imageSize, 0);
+        size_t copied = 0;
+        auto dos = (const IMAGE_DOS_HEADER*)image;
+        if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
+            auto nt = (const IMAGE_NT_HEADERS*)(image + dos->e_lfanew);
+            if (nt->Signature == IMAGE_NT_SIGNATURE) {
+                const size_t headerSize = (std::min)((size_t)nt->OptionalHeader.SizeOfHeaders, imageSize);
+                memcpy(mapped.data(), image, headerSize);
+                copied = headerSize;
+                auto section = IMAGE_FIRST_SECTION(nt);
+                for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+                    const size_t raw = section->PointerToRawData;
+                    const size_t rawSize = section->SizeOfRawData;
+                    const size_t va = section->VirtualAddress;
+                    if (!rawSize || raw + rawSize > imageSize || va >= imageSize)
+                        continue;
+                    const size_t span = (std::min)(rawSize, imageSize - va);
+                    memcpy(mapped.data() + va, image + raw, span);
+                    copied += span;
+                }
+            }
+        }
+        if (!copied) {
+            Logger::Log("{RED}VTIL: image is not a PE, lifting raw bytes{RESET}\n");
+            mapped.assign(image, image + imageSize);
+        }
+        out.write((const char*)mapped.data(), (std::streamsize)mapped.size());
+        if (!out) {
+            Logger::Log("{RED}VTIL: cannot write staged image{RESET}\n");
+            return false;
+        }
+    }
+
     // Build argv-style command line: powershell.exe -NoProfile -ExecutionPolicy Bypass
     //   -File <host.ps1> -InputPath <path> -Rva <rva> -Size <size> -OutputPath <out>
     auto QuoteW = [](const std::wstring& s) { return L"\"" + s + L"\""; };
     std::wstringstream Cmd;
     Cmd << L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File "
         << QuoteW(host)
-        << L" -InputPath " << QuoteW(Utf8ToWide(options.InputPath))
+        << L" -InputPath " << QuoteW(staged)
         << L" -Rva " << options.Rva
         << L" -Size " << options.Size
         << L" -OutputPath " << QuoteW(Utf8ToWide(options.OutputPath));
