@@ -18,6 +18,9 @@
 #define STACK_BASE_UC         0xFFFFA70000000000ULL
 #define STACK_SIZE_UC         0x200000ULL
 #define KPCR_BASE_UC          0xFFFFF80200000000ULL
+// Dedicated zeroed page published as KPCR.LockArray (gs:[0x28]): a non-NULL per-CPU
+// pointer whose every displacement stays inside mapped, zeroed memory.
+#define KPCR_LOCK_ARRAY_UC    0xFFFFF80200090000ULL
 #define KPRCB_BASE_UC         0xFFFFF80200010000ULL
 #define ETHREAD_BASE_UC       0xFFFFF80200020000ULL
 #define EPROCESS_BASE_UC      0xFFFFF80200030000ULL
