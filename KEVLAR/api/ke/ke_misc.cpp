@@ -490,3 +490,21 @@ void h_KeQuerySystemTimePrecise(PLARGE_INTEGER CurrentTime) {
 
     HostTime->QuadPart = UnicornEmu::EmulationStartSystemTime + ElapsedIn100Ns;
 }
+
+// The emulated context is a kernel thread running kernel callbacks, so PreviousMode
+// is KernelMode (0). Drivers that branch on PreviousMode use it to decide whether a
+// parameter needs probing; returning UserMode here would send them down the probe
+// path against the synthetic KPRCB.
+uint8_t h_ExGetPreviousMode() {
+    return 0;   // KernelMode
+}
+
+// Single logical processor is modelled, so every group-qualified lookup resolves to
+// processor 0 (and KeGetCurrentProcessorNumber()'s zero) for consistency with
+// KeQueryActiveProcessorCountEx returning 1..N in group 0.
+ULONG h_KeGetCurrentProcessorNumberEx(PVOID ProcNumber) {
+    auto HostProc = UcPtr((uint32_t*)ProcNumber);
+    if (HostProc)
+        *HostProc = 0;
+    return 0;
+}

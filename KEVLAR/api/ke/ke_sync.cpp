@@ -114,6 +114,69 @@ void h_KeInitializeGuardedMutex(_KGUARDED_MUTEX* Mutex) {
     }
 }
 
+// --- Guarded mutexes --------------------------------------------------------
+// A _KGUARDED_MUTEX serializes by APCs-disabled + spin, not by a dispatcher object;
+// the count is 1 when free. The emulator is single-threaded per guest context, so
+// acquire either takes the free count, or (when contended) hands the wait to the
+// existing mutex manager so a re-entrant acquire on the same host thread blocks the
+// same way the real kernel would rather than spinning forever inside the hook.
+void h_KeAcquireGuardedMutex(_KGUARDED_MUTEX* Mutex) {
+    auto HostMutex = UcPtr(Mutex);
+    if (!HostMutex)
+        return;
+
+    uint64_t Owner = (uint64_t)(uintptr_t)UnicornThread::GetCurrentEthread();
+    if (!Owner)
+        Owner = (uint64_t)(uintptr_t)h_KeGetCurrentThread();
+
+    uint64_t ExpectedFree = 1;
+    if (_InterlockedCompareExchange64(
+            reinterpret_cast<volatile LONG64*>(&HostMutex->Count), 0, (LONG64)ExpectedFree) == 0) {
+        HostMutex->Owner = (_KTHREAD*)Owner;
+        return;
+    }
+
+    HANDLE HostMutexHandle = nullptr;
+    {
+        std::lock_guard<std::mutex> Guard(MutexManager::MutexLock);
+        if (MutexManager::mutex_manager.contains((uintptr_t)Mutex))
+            HostMutexHandle = (HANDLE)MutexManager::mutex_manager[(uintptr_t)Mutex];
+    }
+    if (HostMutexHandle) {
+        WaitForSingleObject(HostMutexHandle, 0);
+        HostMutex->Owner = (_KTHREAD*)Owner;
+        HostMutex->Count = 0;
+        HostMutex->Contention = 0;
+    } else {
+        // No host object: take it anyway so the guest makes progress (single vCPU).
+        HostMutex->Owner = (_KTHREAD*)Owner;
+        _InterlockedExchange64(reinterpret_cast<volatile LONG64*>(&HostMutex->Count), 0);
+    }
+}
+
+void h_KeReleaseGuardedMutex(_KGUARDED_MUTEX* Mutex) {
+    auto HostMutex = UcPtr(Mutex);
+    if (!HostMutex)
+        return;
+    HostMutex->Owner = nullptr;
+    _InterlockedExchange64(reinterpret_cast<volatile LONG64*>(&HostMutex->Count), 1);
+}
+
+// KMUTANT is a dispatcher object (Type 2, SignalState 1 == unowned) with the same
+// header shape KeInitializeMutex builds; only the object bookkeeping differs.
+void h_KeInitializeMutant(_DISPATCHER_HEADER* Mutant, BOOLEAN InitialOwner) {
+    auto HostMutant = UcPtr(Mutant);
+    if (!HostMutant)
+        return;
+    memset(HostMutant, 0, sizeof(_DISPATCHER_HEADER));
+    HostMutant->Type = 2;
+    HostMutant->Size = 5;
+    HostMutant->SignalState = InitialOwner ? 0 : 1;
+    uint64_t WlhUcAddr = (uint64_t)Mutant + offsetof(_DISPATCHER_HEADER, WaitListHead);
+    HostMutant->WaitListHead.Flink = (PLIST_ENTRY)WlhUcAddr;
+    HostMutant->WaitListHead.Blink = (PLIST_ENTRY)WlhUcAddr;
+}
+
 void h_KeInitializeSemaphore(PVOID Semaphore, LONG Count, LONG Limit) {
     Logger::Log("{MAG}\tKeInitializeSemaphore: sem=%p count=%d limit=%d{RESET}\n", Semaphore, Count, Limit);
 

@@ -155,6 +155,19 @@ NTSTATUS h_ObQueryNameString(PVOID Object, PVOID ObjectNameInfo, ULONG Length, P
     return STATUS_SUCCESS;
 }
 
+// ObReferenceObjectByPointer bumps the object's reference count without touching a
+// handle table: ObfReferenceObject already models exactly that bookkeeping.
+NTSTATUS h_ObReferenceObjectByPointer(PVOID Object, ACCESS_MASK DesiredAccess,
+    _OBJECT_TYPE* ObjectType, uint8_t AccessMode) {
+    if (!Object)
+        return STATUS_INVALID_PARAMETER;
+    (void)DesiredAccess;
+    (void)ObjectType;
+    (void)AccessMode;
+    h_ObfReferenceObject(Object);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS h_ObReferenceObjectByHandle(HANDLE handle, ACCESS_MASK DesiredAccess, _OBJECT_TYPE* ObjectType, uint64_t AccessMode, PVOID* Object,
     void* HandleInformation) {
 

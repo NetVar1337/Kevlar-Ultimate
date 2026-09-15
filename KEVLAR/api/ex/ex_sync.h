@@ -20,6 +20,20 @@ void h_ExInitializeRundownProtection(_EX_RUNDOWN_REF* RunRef);
 BOOLEAN h_ExAcquireRundownProtection(_EX_RUNDOWN_REF* RunRef);
 void h_ExReleaseRundownProtection(_EX_RUNDOWN_REF* RunRef);
 void h_ExWaitForRundownProtectionRelease(_EX_RUNDOWN_REF* RunRef);
+
+// _EX_RUNDOWN_REF_CACHE_AWARE: { ULONG Count; SIZE_T Size; PVOID CacheAware[1]; }
+// with one cache-line-padded _EX_RUNDOWN_REF_CACHE_AWARE_REF per processor. The
+// emulator exposes one logical processor, so a single slot backs the whole family.
+struct _EX_RUNDOWN_REF_CACHE_AWARE {
+    ULONG Count;
+    SIZE_T Size;
+    PVOID CacheAware[1];
+};
+BOOL h_ExAllocateCacheAwareRundownProtection(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef, uint32_t PoolType);
+ULONG h_ExFreeCacheAwareRundownProtection(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef);
+BOOLEAN h_ExAcquireRundownProtectionCacheAwareEx(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef, ULONG Count);
+void h_ExReleaseRundownProtectionCacheAwareEx(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef, ULONG Count);
+void h_ExWaitForRundownProtectionReleaseCacheAware(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef);
 void h_ExAcquireFastMutexUnsafe(PFAST_MUTEX FastMutex);
 void h_ExReleaseFastMutexUnsafe(PFAST_MUTEX FastMutex);
 void h_ExInitializePushLock(volatile uint64_t* PushLock);

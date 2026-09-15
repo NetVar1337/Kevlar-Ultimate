@@ -162,6 +162,45 @@ NTSTATUS h_ZwSetInformationFile(HANDLE FileHandle, PVOID IoStatusBlock, PVOID Fi
     return (NTSTATUS)__NtRoutine("NtSetInformationFile", FileHandle, HostIsb, HostInfo, Length, FileInformationClass);
 }
 
+// IoQueryFileInformation answers the classes a driver uses to fingerprint an open
+// file: the byte offset, the allocation/end-of-file sizes, and the internal file id.
+// Anything else is delegated to the host ZwQueryInformationFile for the same handle.
+NTSTATUS h_IoQueryFileInformation(PVOID FileObject, ULONG Length,
+    PVOID FileInformation, ULONG FileInformationClass) {
+    auto HostInfo = UcPtr((uint8_t*)FileInformation);
+    if (!HostInfo)
+        return STATUS_INVALID_PARAMETER;
+
+    switch (FileInformationClass) {
+    case 14: { // FilePositionInformation
+        if (Length < 8) return STATUS_BUFFER_TOO_SMALL;
+        memset(HostInfo, 0, 8);
+        return STATUS_SUCCESS;
+    }
+    case 5: {  // FileStandardInformation
+        if (Length < 0x18) return STATUS_BUFFER_TOO_SMALL;
+        memset(HostInfo, 0, 0x18);
+        return STATUS_SUCCESS;
+    }
+    case 6: {  // FileInternalInformation
+        if (Length < 8) return STATUS_BUFFER_TOO_SMALL;
+        memset(HostInfo, 0, 8);
+        return STATUS_SUCCESS;
+    }
+    case 8: {  // FileEaInformation
+        if (Length < 4) return STATUS_BUFFER_TOO_SMALL;
+        memset(HostInfo, 0, 4);
+        return STATUS_SUCCESS;
+    }
+    default:
+        break;
+    }
+    Logger::Log("{YEL}\tIoQueryFileInformation: class=%lu delegating to host{RESET}\n",
+        FileInformationClass);
+    return (NTSTATUS)__NtRoutine("ZwQueryInformationFile", FileObject, HostInfo, Length,
+        FileInformationClass);
+}
+
 NTSTATUS h_ZwOpenSection(PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, OBJECT_ATTRIBUTES* ObjectAttributes) {
     auto HostHandle = UcPtr(SectionHandle);
     OBJECT_ATTRIBUTES LocalOa; UNICODE_STRING LocalName;

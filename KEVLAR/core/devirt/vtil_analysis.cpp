@@ -1,8 +1,11 @@
 #include "core/devirt/vtil_analysis.h"
 #include <windows.h>
 #include <Logger/Logger.h>
+#include <algorithm>
+#include <fstream>
 #include <string>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -34,13 +37,32 @@ bool VtilAnalysis::LiftImageRegion(const uint8_t* image, size_t imageSize, const
     auto slash = host.find_last_of(L"\\/");
     host = host.substr(0, slash + 1) + L"kevlar-vtil-host.ps1";
 
+    // The caller passes a buffer that is already section-mapped by PEMapper
+    // (sections live at their virtual addresses), which is exactly the layout the
+    // lifter indexes by RVA. Write it through verbatim. Re-mapping it here from the
+    // PE section table corrupted the input: the table's raw offsets describe the
+    // on-disk file, not this buffer, so most of the image came out zeroed.
+    std::wstring staged = host.substr(0, slash + 1) + L"kevlar-vtil-image.bin";
+    {
+        std::ofstream out(staged, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            Logger::Log("{RED}VTIL: cannot stage mapped image{RESET}\n");
+            return false;
+        }
+        out.write((const char*)image, (std::streamsize)imageSize);
+        if (!out) {
+            Logger::Log("{RED}VTIL: cannot write staged image{RESET}\n");
+            return false;
+        }
+    }
+
     // Build argv-style command line: powershell.exe -NoProfile -ExecutionPolicy Bypass
     //   -File <host.ps1> -InputPath <path> -Rva <rva> -Size <size> -OutputPath <out>
     auto QuoteW = [](const std::wstring& s) { return L"\"" + s + L"\""; };
     std::wstringstream Cmd;
     Cmd << L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File "
         << QuoteW(host)
-        << L" -InputPath " << QuoteW(Utf8ToWide(options.InputPath))
+        << L" -InputPath " << QuoteW(staged)
         << L" -Rva " << options.Rva
         << L" -Size " << options.Size
         << L" -OutputPath " << QuoteW(Utf8ToWide(options.OutputPath));

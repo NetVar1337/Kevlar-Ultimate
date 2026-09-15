@@ -317,7 +317,7 @@ void UnicornEmu::Hooks::OnSysModRead(uc_engine* Uc, uc_mem_type Type, uint64_t A
     }
 }
 
-void UnicornEmu::InstallWatchpoints(uc_engine* Uc) {
+void UnicornEmu::InstallWatchpoints(uc_engine* Uc, PEFile* MainModule) {
     uc_hook Hh;
 
     if (DiagnosticHooksEnabled) {
@@ -597,10 +597,18 @@ void UnicornEmu::InstallWatchpoints(uc_engine* Uc) {
         RipRingTotal = 0;
         using RipTraceFn = void(*)(uc_engine*, uint64_t, uint32_t, void*);
         static RipTraceFn RipTracePtr = OnRipRingTrace;
+        // Cover the whole mapped image, not a hardcoded prefix: the loaded driver can be
+        // far larger than 0x3000000 (vgk.sys maps ~0x445e000 and its entry sits at RVA
+        // 0x3e2e13c), and a range that does not reach the executing code leaves
+        // RipRingTotal at 0 so every RIP-ring diagnostic reports nothing.
+        const uint64_t RipRingSpan = MainModule && MainModule->GetVirtualSize()
+            ? (uint64_t)MainModule->GetVirtualSize()
+            : 0x10000000ULL;
         Err = uc_hook_add(Uc, &Hh, UC_HOOK_CODE, (void*)RipTracePtr, nullptr,
-            DRIVER_BASE_UC, DRIVER_BASE_UC + 0x3000000ULL - 1);
+            DRIVER_BASE_UC, DRIVER_BASE_UC + RipRingSpan - 1);
         if (Err == UC_ERR_OK) {
-            Logger::Log("{CYN}RIP ring trace installed (last %d instructions){RESET}\n", RIP_RING_SIZE);
+            Logger::Log("{CYN}RIP ring trace installed (last %d instructions, range 0x%llx-0x%llx){RESET}\n",
+                RIP_RING_SIZE, DRIVER_BASE_UC, DRIVER_BASE_UC + RipRingSpan - 1);
         }
 
         static auto OnStackErrorWrite = [](uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData) {

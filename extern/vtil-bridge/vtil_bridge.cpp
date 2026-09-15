@@ -39,18 +39,27 @@ extern "C" __declspec(dllexport) int kevlar_vtil_lift(
         uint64_t vip = rva;
         uint8_t* code = const_cast<uint8_t*>(image + rva);
         const uint64_t end = rva + size;
-        while (vip < end) {
-            block->label_begin(vip);
+        // Bounded linear decode into a single block. label_begin()/label_end() are
+        // deliberately not used here: they emit label pseudo-instructions, and
+        // inserting one after a branching instruction trips VTIL's
+        // basic_block::insert_final assertion (!prev(it)->base->is_branching()) for
+        // any region that ends on a branch (i.e. most real functions). A linear
+        // region has no internal control-flow targets to label anyway.
+        //
+        // lifter_t::process may itself terminate the block (it emits vexit for an
+        // opcode it cannot lift) and still return 0, so every terminal insert below
+        // checks is_complete() first - appending after a branching instruction is a
+        // hard assertion, not a recoverable condition.
+        while (vip < end && !block->is_complete()) {
             const size_t length = vtil::lifter::amd64::lifter_t::process(block, vip, code);
-            block->label_end();
+            if (block->is_complete())
+                break;
             if (!length) {
                 block->vexit(vip);
                 break;
             }
             code += length;
             vip += length;
-            if (block->is_complete())
-                break;
         }
         if (!block->is_complete())
             block->vexit(vip);

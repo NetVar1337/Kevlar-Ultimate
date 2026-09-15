@@ -457,6 +457,19 @@ void ntoskrnl_provider::Initialize() {
     Provider::AddFuncImpl("MmBuildMdlForNonPagedPool", h_MmBuildMdlForNonPagedPool);
     Provider::AddFuncImpl("RtlImageNtHeader", h_RtlImageNtHeader);
     Provider::AddFuncImpl("RtlPcToFileHeader", h_RtlPcToFileHeader);
+    // Previously unimplemented ntoskrnl imports observed on VGK's import list.
+    Provider::AddFuncImpl("KeAcquireGuardedMutex", h_KeAcquireGuardedMutex);
+    Provider::AddFuncImpl("KeReleaseGuardedMutex", h_KeReleaseGuardedMutex);
+    Provider::AddFuncImpl("KeInitializeMutant", h_KeInitializeMutant);
+    Provider::AddFuncImpl("ExGetPreviousMode", h_ExGetPreviousMode);
+    Provider::AddFuncImpl("IoQueryFileInformation", h_IoQueryFileInformation);
+    Provider::AddFuncImpl("KeGetCurrentProcessorNumberEx", h_KeGetCurrentProcessorNumberEx);
+    Provider::AddFuncImpl("ExAllocateCacheAwareRundownProtection", h_ExAllocateCacheAwareRundownProtection);
+    Provider::AddFuncImpl("ExFreeCacheAwareRundownProtection", h_ExFreeCacheAwareRundownProtection);
+    Provider::AddFuncImpl("ExAcquireRundownProtectionCacheAwareEx", h_ExAcquireRundownProtectionCacheAwareEx);
+    Provider::AddFuncImpl("ExReleaseRundownProtectionCacheAwareEx", h_ExReleaseRundownProtectionCacheAwareEx);
+    Provider::AddFuncImpl("ExWaitForRundownProtectionReleaseCacheAware", h_ExWaitForRundownProtectionReleaseCacheAware);
+    Provider::AddFuncImpl("ObReferenceObjectByPointer", h_ObReferenceObjectByPointer);
     Provider::AddFuncImpl("IoCreateNotificationEvent", h_IoCreateNotificationEvent);
     Provider::AddFuncImpl("KeInitializeDpc", h_KeInitializeDpc);
     Provider::AddFuncImpl("KeInsertQueueDpc", h_KeInsertQueueDpc);

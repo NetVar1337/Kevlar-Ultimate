@@ -18,6 +18,13 @@
 #define STACK_BASE_UC         0xFFFFA70000000000ULL
 #define STACK_SIZE_UC         0x200000ULL
 #define KPCR_BASE_UC          0xFFFFF80200000000ULL
+// Dedicated zeroed page published as KPCR.LockArray (gs:[0x28]): a non-NULL per-CPU
+// pointer whose every displacement stays inside mapped, zeroed memory.
+#define KPCR_LOCK_ARRAY_UC    0xFFFFF80200090000ULL
+// Zeroed, writable kernel page used as the per-CPU lock the VM dispatcher acquires via
+// gs:[0x28]+0x68. Kept separate from the LockArray page so driver writes to the lock do
+// not collide with the scratch slot the entry stub reads.
+#define KPCR_LOCK_QUEUE_UC    0xFFFFF802000A0000ULL
 #define KPRCB_BASE_UC         0xFFFFF80200010000ULL
 #define ETHREAD_BASE_UC       0xFFFFF80200020000ULL
 #define EPROCESS_BASE_UC      0xFFFFF80200030000ULL
@@ -162,6 +169,7 @@ void OnMsrFallback(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
     void OnEacBufferRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr,
         int Size, int64_t Value, void* UserData);
 void OnFocusedTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+void OnRvaWatch(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnVmStepTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnStackWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
 void OnProtectedCodeWrite(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
@@ -219,10 +227,11 @@ std::optional<Kevlar::Coverage::ModuleLocation> ResolveCoverageModule(uint64_t U
 void InstallDivWatch(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallSseAlignCheck(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End);
+void InstallRvaWatch(uc_engine* Uc, const uint64_t* Rvas, int Count);
 void InstallStackWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
 void InstallProtectedCodeWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
 void InstallVmStepTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize, uint64_t Trigger, uint32_t Steps);
 void InitMsrStore();
-void InstallWatchpoints(uc_engine* Uc);
+void InstallWatchpoints(uc_engine* Uc, PEFile* MainModule = nullptr);
 
 }

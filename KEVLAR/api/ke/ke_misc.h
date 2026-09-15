@@ -30,5 +30,8 @@ int DeliverPendingApcs();
 HANDLE KeCurrentWakeEvent();
 uint64_t h_KeQueryActiveProcessorCountEx(uint16_t GroupNumber);
 void h_KeQuerySystemTimePrecise(PLARGE_INTEGER CurrentTime);
+// Executive/processor helpers that were previously unimplemented ntoskrnl imports.
+uint8_t h_ExGetPreviousMode();
+ULONG h_KeGetCurrentProcessorNumberEx(PVOID ProcNumber);
 // IRQL assertion helper: logs at {RED} if current IRQL exceeds MaxIrql.
 void KevlarAssertIrql(const char* FuncName, UCHAR MaxIrql);

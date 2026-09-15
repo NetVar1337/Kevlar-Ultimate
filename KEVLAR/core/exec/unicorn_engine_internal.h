@@ -9,6 +9,10 @@ extern void* SentinelMemory;
 extern void* GdtMemory;
 extern void* IdtMemory;
 extern void* KpcrBlock;
+// Zeroed page mapped at KPCR_LOCK_ARRAY_UC and published as KPCR.LockArray.
+extern void* LockArrayScratch;
+// Zeroed page mapped at KPCR_LOCK_QUEUE_UC, backing the per-CPU lock at gs:[0x28]+0x68.
+extern void* LockWordScratch;
 extern void* EthreadBlock;
 extern void* EprocessBlock;
 extern void* DrvObjBlock;

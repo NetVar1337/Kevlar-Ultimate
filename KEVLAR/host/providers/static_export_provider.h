@@ -38,6 +38,7 @@ MONITOR uint64_t ExCoreMessagingObjectType = 0;
 MONITOR uint64_t ExDesktopObjectType = 0;
 MONITOR uint64_t ExEventObjectType = 0;
 MONITOR uint64_t ExRawInputManagerObjectType = 0;
+MONITOR uint64_t ExMutantObjectType = 0;
 MONITOR uint64_t ExSemaphoreObjectType = 0;
 MONITOR uint64_t ExTimerObjectType = 0;
 MONITOR uint64_t ExWindowStationObjectType = 0;

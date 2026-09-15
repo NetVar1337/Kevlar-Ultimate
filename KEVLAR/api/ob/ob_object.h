@@ -39,6 +39,7 @@ uint64_t h_ObfDereferenceObject(PVOID obj);
 LONG_PTR h_ObfReferenceObject(PVOID Object);
 NTSTATUS h_ObOpenObjectByPointer(PVOID Object, ULONG HandleAttributes, PVOID PassedAccessState, ACCESS_MASK DesiredAccess, uint64_t ObjectType, uint64_t AccessMode, PHANDLE Handle);
 NTSTATUS h_ObQueryNameString(PVOID Object, PVOID ObjectNameInfo, ULONG Length, PULONG ReturnLength);
+NTSTATUS h_ObReferenceObjectByPointer(PVOID Object, ACCESS_MASK DesiredAccess, _OBJECT_TYPE* ObjectType, uint8_t AccessMode);
 NTSTATUS h_ObReferenceObjectByHandle(HANDLE handle, ACCESS_MASK DesiredAccess, _OBJECT_TYPE* ObjectType, uint64_t AccessMode, PVOID* Object, void* HandleInformation);
 NTSTATUS h_ObRegisterCallbacks(PVOID CallbackRegistration, PVOID* RegistrationHandle);
 void h_ObUnRegisterCallbacks(PVOID RegistrationHandle);

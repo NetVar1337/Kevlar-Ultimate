@@ -36,9 +36,11 @@ static void SeedPerThreadLockQueues(uint8_t* PerThreadKpcr, uint64_t ThreadKpcrA
         uint64_t* Entry = (uint64_t*)(PerThreadKpcr + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue +
                                       Index * kLockQueueStride);
         Entry[0] = QueueBase + Index * kLockQueueStride;   // Next -> &this queue
-        Entry[1] = QueueBase + Index * kLockQueueStride;   // Lock slot also pointer-valid
+        Entry[1] = 0;                                      // Lock -> 0 (unowned)
     }
-    *(uint64_t*)(PerThreadKpcr + 0x28) = QueueBase;
+    // gs:[0x28] itself points at a dedicated zeroed per-CPU scratch page, so a
+    // driver reading it never aliases live lock state through a truncated pointer.
+    *(uint64_t*)(PerThreadKpcr + 0x28) = KPCR_LOCK_ARRAY_UC;
 }
 
 bool TlsHasGuestContext() { return TlsContext != nullptr; }
@@ -221,6 +223,12 @@ ThreadContext* UnicornThread::Create(uint64_t StartRoutine, uint64_t StartContex
     SeedPerThreadLockQueues(PerThreadKpcr, ThreadKpcrAddr);
 
     uc_reg_write(Ctx->Engine, UC_X86_REG_GS_BASE, &ThreadKpcrAddr);
+
+    // The per-thread engine needs its own mapping of the zeroed LockArray scratch
+    // page so the published gs:[0x28] value resolves in this engine too.
+    if (LockArrayScratch) {
+        uc_mem_map_ptr(Ctx->Engine, KPCR_LOCK_ARRAY_UC, 0x1000, UC_PROT_ALL, LockArrayScratch);
+    }
 
     uint64_t VerifyGsBase = 0;
     uc_reg_read(Ctx->Engine, UC_X86_REG_GS_BASE, &VerifyGsBase);

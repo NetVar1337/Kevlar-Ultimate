@@ -96,6 +96,48 @@ uint64_t UnicornEmu::MapKernelStructs() {
 
     MapRegionPtr(PrimaryEngine, KPCR_BASE_UC, KpcrSize, UC_PROT_ALL, KpcrBlock, "KPCR+KPRCB");
 
+    if (!LockArrayScratch) {
+        LockArrayScratch = _aligned_malloc(0x1000, 0x1000);
+        if (!LockArrayScratch) {
+            Logger::Log("{RED}Failed to allocate KPCR LockArray scratch{RESET}\n");
+            return 1;
+        }
+        memset(LockArrayScratch, 0, 0x1000);
+
+        // gs:[0x28]+0x68 is the per-CPU lock the driver's VM dispatcher spins on:
+        // .grfn1 does `rcx = [[gs:[0x28]+0x68]+0x18]; lock cmpxchg [rcx], ...` and
+        // loops until the compare-exchange succeeds, i.e. it is acquiring a spin lock
+        // whose pointer comes from this slot. Seeding the slot with a PC inside the
+        // driver image (an earlier guess at the entry stub's `RtlPcToFileHeader`
+        // argument) put a *nonzero* value in that lock word, so the acquire could never
+        // succeed and the VM livelocked. Point it at dedicated zeroed, writable kernel
+        // memory instead: the lock is free (0 == unowned), the acquire succeeds, and the
+        // derived pointer is a valid mapped kernel address.
+        {
+            uint64_t LockWord = KPCR_LOCK_QUEUE_UC;
+            memcpy((uint8_t*)LockArrayScratch + 0x68, &LockWord, sizeof(LockWord));
+        }
+    }
+    if (!uc_mem_map_ptr(PrimaryEngine, KPCR_LOCK_ARRAY_UC, 0x1000, UC_PROT_ALL, LockArrayScratch)) {
+        UnicornMem::TrackExisting(KPCR_LOCK_ARRAY_UC, LockArrayScratch, 0x1000, "KPCR.LockArray");
+        MappedRegions.push_back({ KPCR_LOCK_ARRAY_UC, 0x1000, LockArrayScratch, "KPCR.LockArray", UC_PROT_ALL });
+    }
+
+    // Zeroed writable page backing the per-CPU lock at gs:[0x28]+0x68. Writes from the
+    // driver reach the host buffer directly, so the lock state stays consistent.
+    if (!LockWordScratch) {
+        LockWordScratch = _aligned_malloc(0x1000, 0x1000);
+        if (!LockWordScratch) {
+            Logger::Log("{RED}Failed to allocate per-CPU lock page{RESET}\n");
+            return 1;
+        }
+        memset(LockWordScratch, 0, 0x1000);
+    }
+    if (!uc_mem_map_ptr(PrimaryEngine, KPCR_LOCK_QUEUE_UC, 0x1000, UC_PROT_ALL, LockWordScratch)) {
+        UnicornMem::TrackExisting(KPCR_LOCK_QUEUE_UC, LockWordScratch, 0x1000, "KPCR.LockWord");
+        MappedRegions.push_back({ KPCR_LOCK_QUEUE_UC, 0x1000, LockWordScratch, "KPCR.LockWord", UC_PROT_ALL });
+    }
+
     uint64_t KpcrAddr = KPCR_BASE_UC;
     uc_mem_write(PrimaryEngine, KPCR_BASE_UC + 0x18, &KpcrAddr, 8);
 
@@ -108,18 +150,12 @@ uint64_t UnicornEmu::MapKernelStructs() {
     uint64_t EthreadAddr = ETHREAD_BASE_UC;
     uc_mem_write(PrimaryEngine, KPCR_BASE_UC + KPCR_PRCB_OFFSET + KPRCB_CURRENT_THREAD, &EthreadAddr, 8);
 
-    // KiInitializePcrLockQueues publishes KPRCB.LockQueue[] as a KSPIN_LOCK_QUEUE
-    // array whose Next points at the queue itself, and stores the base in
-    // KPCR.LockArray (gs:[0x28]). Leaving LockArray NULL is both an emulation tell
-    // and a null-deref source: VGK dereferences gs:[0x28] on its first obfuscated
-    // path (drv+0x3eb149b -> 0x3e85fa0). Probed value: with Lock=0 the target takes
-    // drv+0x3e9b256 (write of its "0ini" tag through the derived pointer); with
-    // Lock pointer-valid the target reaches drv+0x3eb5dce (tagged-pointer store).
-    // Neither is the real Windows value yet — the field VGK reads is its own
-    // per-CPU scratch, written earlier in its own entry path — so this seeds a
-    // usable, mapped array and keeps the read non-NULL while the real writer is
-    // located. Every slot is pointer-valid so the target's computed offsets land
-    // in mapped memory instead of faulting on a zero slot.
+    // KPCR.LockArray (gs:[0x28]) points at the per-CPU KSPIN_LOCK_QUEUE array that
+    // KiInitializePcrLockQueues publishes (KPRCB.LockQueue). Seed that array with the
+    // faithful self-referential/zero layout, but publish a dedicated zeroed scratch
+    // block as the gs:[0x28] value itself: a driver that reads gs:[0x28] gets a
+    // non-NULL per-CPU pointer whose every displacement still lands in mapped, zeroed
+    // memory, instead of aliasing live lock state through a truncated pointer.
     {
         // KSPIN_LOCK_QUEUE is 16 bytes (Next + Lock); the kernel array spans
         // KPRCB.LockQueue..KPRCB.PPLookasideList.
@@ -129,13 +165,14 @@ uint64_t UnicornEmu::MapKernelStructs() {
         const uint64_t QueueBaseUc = KPCR_BASE_UC + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue;
         for (uint64_t Index = 0; Index < kQueueCount; ++Index) {
             uint64_t NextUc = QueueBaseUc + Index * kLockQueueStride;
-            uint64_t Entry[2] = { NextUc, NextUc };
+            uint64_t Entry[2] = { NextUc, 0 };
             uc_mem_write(PrimaryEngine, NextUc, Entry, sizeof(Entry));
         }
-        uint64_t LockArrayPtr = QueueBaseUc;
+        uint64_t LockArrayPtr = KPCR_LOCK_ARRAY_UC;
         uc_mem_write(PrimaryEngine, KPCR_BASE_UC + 0x28, &LockArrayPtr, 8);
-        Logger::Log("{GRY}KPCR.LockArray -> KPRCB.LockQueue %llu self-referential queues at UC 0x%llx{RESET}\n",
-            (unsigned long long)kQueueCount, (unsigned long long)QueueBaseUc);
+        Logger::Log("{GRY}KPCR.LockArray -> zeroed per-CPU scratch UC 0x%llx (KPRCB.LockQueue %llu queues at 0x%llx){RESET}\n",
+            (unsigned long long)KPCR_LOCK_ARRAY_UC, (unsigned long long)kQueueCount,
+            (unsigned long long)QueueBaseUc);
     }
 
     uint64_t EthreadSize = 0x10000;
