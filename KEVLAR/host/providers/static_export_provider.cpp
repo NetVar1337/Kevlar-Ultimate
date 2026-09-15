@@ -41,6 +41,33 @@ namespace ntoskrnl_export {
         auto DeviceTypeHost = (_OBJECT_TYPE*)UnicornMem::UcToHost(DeviceTypeUcAddr);
         DeviceTypeHost->TotalNumberOfObjects = 1;
         IoDeviceObjectType = DeviceTypeUcAddr;
+
+        // Ex* object types are referenced by data through ntoskrnl's export table the
+        // same way the Io/Ps types are; drivers that look one up directly (e.g. to
+        // compare an object's type) need a mapped, non-NULL _OBJECT_TYPE.
+        uint64_t EventTypeUcAddr = UnicornMem::AllocateVariable(
+            UnicornEmu::PrimaryEngine, sizeof(_OBJECT_TYPE) * 2, "NTOSKRNL.ExEventObjectType");
+        auto EventTypeHost = (_OBJECT_TYPE*)UnicornMem::UcToHost(EventTypeUcAddr);
+        EventTypeHost->TotalNumberOfObjects = 1;
+        ExEventObjectType = EventTypeUcAddr;
+
+        uint64_t MutantTypeUcAddr = UnicornMem::AllocateVariable(
+            UnicornEmu::PrimaryEngine, sizeof(_OBJECT_TYPE) * 2, "NTOSKRNL.ExMutantObjectType");
+        auto MutantTypeHost = (_OBJECT_TYPE*)UnicornMem::UcToHost(MutantTypeUcAddr);
+        MutantTypeHost->TotalNumberOfObjects = 1;
+        ExMutantObjectType = MutantTypeUcAddr;
+
+        uint64_t SemaphoreTypeUcAddr = UnicornMem::AllocateVariable(
+            UnicornEmu::PrimaryEngine, sizeof(_OBJECT_TYPE) * 2, "NTOSKRNL.ExSemaphoreObjectType");
+        auto SemaphoreTypeHost = (_OBJECT_TYPE*)UnicornMem::UcToHost(SemaphoreTypeUcAddr);
+        SemaphoreTypeHost->TotalNumberOfObjects = 1;
+        ExSemaphoreObjectType = SemaphoreTypeUcAddr;
+
+        uint64_t TimerTypeUcAddr = UnicornMem::AllocateVariable(
+            UnicornEmu::PrimaryEngine, sizeof(_OBJECT_TYPE) * 2, "NTOSKRNL.ExTimerObjectType");
+        auto TimerTypeHost = (_OBJECT_TYPE*)UnicornMem::UcToHost(TimerTypeUcAddr);
+        TimerTypeHost->TotalNumberOfObjects = 1;
+        ExTimerObjectType = TimerTypeUcAddr;
     }
 
     void InitializePsLoadedModuleList() {
@@ -104,6 +131,10 @@ namespace ntoskrnl_export {
         Provider::AddDataImpl("IoDriverObjectType", &IoDriverObjectType, sizeof(IoDriverObjectType));
         Provider::AddDataImpl("IoDeviceObjectType", &IoDeviceObjectType, sizeof(IoDeviceObjectType));
         Provider::AddDataImpl("IoFileObjectType", &IoFileObjectType, sizeof(IoFileObjectType));
+        Provider::AddDataImpl("ExEventObjectType", &ExEventObjectType, sizeof(ExEventObjectType));
+        Provider::AddDataImpl("ExMutantObjectType", &ExMutantObjectType, sizeof(ExMutantObjectType));
+        Provider::AddDataImpl("ExSemaphoreObjectType", &ExSemaphoreObjectType, sizeof(ExSemaphoreObjectType));
+        Provider::AddDataImpl("ExTimerObjectType", &ExTimerObjectType, sizeof(ExTimerObjectType));
         Provider::AddDataImpl("PsLoadedModuleResource", &PsLoadedModuleResource, sizeof(PsLoadedModuleResource));
         Provider::AddDataImpl("PsJobType", &PsJobType, sizeof(PsJobType));
         Provider::AddDataImpl("SeTokenObjectType", &SeTokenObjectType, sizeof(SeTokenObjectType));

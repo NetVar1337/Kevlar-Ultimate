@@ -336,3 +336,66 @@ void h_ExWaitForRundownProtectionRelease(_EX_RUNDOWN_REF* RunRef) {
     while ((*Count & ~1LL) != 0)
         _mm_pause();
 }
+
+// --- Cache-aware rundown protection -----------------------------------------
+// _EX_RUNDOWN_REF_CACHE_AWARE is { ULONG Count; SIZE_T Size; PVOID CacheAware[1]; }
+// where CacheAware[] holds one cache-line-padded _EX_RUNDOWN_REF_CACHE_AWARE_REF per
+// active processor. The emulator runs the guest on a single logical processor, so one
+// slot is sufficient and the real per-slot acquire/release path is shared with the
+// plain rundown implementation above.
+BOOL h_ExAllocateCacheAwareRundownProtection(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef,
+    uint32_t PoolType) {
+    auto HostRef = UcPtr((uint8_t*)RunRef);
+    if (!HostRef)
+        return FALSE;
+    memset(HostRef, 0, 0x80);
+    _InterlockedExchange64(reinterpret_cast<volatile LONG64*>(&HostRef[0x10]), 0);
+    (void)PoolType;
+    return TRUE;
+}
+
+ULONG h_ExFreeCacheAwareRundownProtection(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef) {
+    auto HostRef = UcPtr((uint8_t*)RunRef);
+    if (HostRef)
+        memset(HostRef, 0, 0x80);
+    return 0;
+}
+
+BOOLEAN h_ExAcquireRundownProtectionCacheAwareEx(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef,
+    ULONG Count) {
+    auto HostRef = UcPtr((uint8_t*)RunRef);
+    if (!HostRef)
+        return FALSE;
+    auto SlotCount = reinterpret_cast<volatile LONG64*>(&HostRef[0x10]);
+    for (ULONG I = 0; I < (Count ? Count : 1); ++I) {
+        if (!ExAcquireRundownProtectionImpl(SlotCount))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+void h_ExReleaseRundownProtectionCacheAwareEx(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef,
+    ULONG Count) {
+    auto HostRef = UcPtr((uint8_t*)RunRef);
+    if (!HostRef)
+        return;
+    auto SlotCount = reinterpret_cast<volatile LONG64*>(&HostRef[0x10]);
+    for (ULONG I = 0; I < (Count ? Count : 1); ++I)
+        ExReleaseRundownProtectionImpl(SlotCount);
+}
+
+void h_ExWaitForRundownProtectionReleaseCacheAware(_EX_RUNDOWN_REF_CACHE_AWARE* RunRef) {
+    auto HostRef = UcPtr((uint8_t*)RunRef);
+    if (!HostRef)
+        return;
+    auto SlotCount = reinterpret_cast<volatile LONG64*>(&HostRef[0x10]);
+    LONG64 cur = *SlotCount;
+    while (!(cur & 1)) {
+        LONG64 prev = _InterlockedCompareExchange64(SlotCount, cur | 1, cur);
+        if (prev == cur)
+            break;
+        cur = prev;
+    }
+    while ((*SlotCount & ~1LL) != 0)
+        _mm_pause();
+}
