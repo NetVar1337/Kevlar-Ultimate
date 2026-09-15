@@ -226,6 +226,6 @@ void InstallStackWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSiz
 void InstallProtectedCodeWriteWatch(uc_engine* Uc, uint64_t WatchAddr, uint64_t WatchSize);
 void InstallVmStepTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize, uint64_t Trigger, uint32_t Steps);
 void InitMsrStore();
-void InstallWatchpoints(uc_engine* Uc);
+void InstallWatchpoints(uc_engine* Uc, PEFile* MainModule = nullptr);
 
 }

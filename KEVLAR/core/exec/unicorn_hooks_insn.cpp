@@ -390,6 +390,14 @@ static uint64_t LastRaxErrorRip = 0;
 static uint64_t LastRaxErrorInsn = 0;
 static int RaxErrorStreak = 0;
 static bool PlatformStatusCaught[256] = {};
+// Origin watch for the driver's own status sentinel. When a target returns a
+// non-NTSTATUS tag through a register it was loaded from somewhere earlier, so
+// record where the value first appears and what the immediately-preceding
+// instructions were. Guarded to the single edge so it costs nothing after the hit.
+static bool SentinelOriginCaught[4] = {};
+static const uint32_t SentinelWatched[4] = { 0xd4494e49u, 0x696e6930u, 0xe0000135u, 0x00000000u };
+static uint64_t SentinelPrevRip[6] = {};
+static int SentinelPrevCount = 0;
 void OnRipRingTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData) {
     uint64_t Rax = 0;
     uc_reg_read(Uc, UC_X86_REG_RAX, &Rax);
@@ -404,6 +412,38 @@ void OnRipRingTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData)
             PlatformStatus, Addr, Addr - DRIVER_BASE_UC, Rax, Rbx, RipRingTotal,
             UnicornEmu::DisassembleAt(Uc, Addr).c_str());
     }
+
+    // Sentinel write-origin: the first instruction at which RAX/RDX hold a watched
+    // tag, plus the preceding instructions that produced it.
+    {
+        uint64_t Rdx = 0;
+        uc_reg_read(Uc, UC_X86_REG_RDX, &Rdx);
+        const uint32_t RaxLo = (uint32_t)Rax;
+        const uint32_t RdxLo = (uint32_t)Rdx;
+        const uint32_t Hits[2] = { RaxLo, RdxLo };
+        for (int S = 0; S < 2; ++S) {
+            for (int W = 0; W < 4; ++W) {
+                if (SentinelWatched[W] == 0 || SentinelOriginCaught[W])
+                    continue;
+                if (Hits[S] != SentinelWatched[W])
+                    continue;
+                SentinelOriginCaught[W] = true;
+                Logger::Log("{RED}[SENTINEL ORIGIN] 0x%08x first in %s at RIP=0x%llx drv+0x%llx insn#%llu %s{RESET}\n",
+                    SentinelWatched[W], S == 0 ? "RAX" : "RDX", Addr, Addr - DRIVER_BASE_UC,
+                    RipRingTotal, UnicornEmu::DisassembleAt(Uc, Addr).c_str());
+                for (int P = 0; P < 6 && P < SentinelPrevCount; ++P) {
+                    const int Slot = (SentinelPrevCount - 1 - P) % 6;
+                    if (Slot < 0)
+                        break;
+                    Logger::Log("{RED}    prev[-%d] drv+0x%llx{RESET}\n",
+                        P, SentinelPrevRip[Slot] - DRIVER_BASE_UC);
+                }
+            }
+        }
+        SentinelPrevRip[SentinelPrevCount % 6] = Addr;
+        SentinelPrevCount++;
+    }
+
     auto& E = RipRingBuf[RipRingIdx % RIP_RING_SIZE];
     E.Rip = Addr;
     E.Rax = Rax;

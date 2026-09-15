@@ -53,6 +53,9 @@
 static bool NoPause = false;
 static bool TargetCompatEnabled = false;
 static bool EacServiceEmu = false;
+// Neutralizes a protected driver's DriverEntry guard wrapper so the real initializer
+// runs instead of returning the driver's self-test sentinel. See kevlar.cpp usage.
+static bool DriverEntryGateBypassEnabled = false;
 static std::string AflBitmapPath;
 static std::string CoverageBasePath;
 static std::string CoverageOutPath;
@@ -269,6 +272,7 @@ int main(int Argc, char* Argv[]) {
         Logger::Log("  --vtil-rva <rva>        Lift a bounded AMD64 region into optimized VTIL{RESET}\n");
         Logger::Log("  --vtil-size <bytes>     Bytes available to the VTIL lifter (default: 0x5000){RESET}\n");
         Logger::Log("  --target-compat          Enable exact-version status normalization for analysis{RESET}\n");
+        Logger::Log("  --gate-bypass            Analysis: neutralize a DriverEntry guard wrapper so the real initializer runs{RESET}\n");
         Logger::Log("  --no-target-compat       Disable exact-version target continuation hooks{RESET}\n");
         Logger::Log("  --vtil-out <file>       VTIL serialization path (default: executable directory){RESET}\n");
         Logger::Log("  --max-insns <n>         Stop DriverEntry after n instructions and report RIP{RESET}\n");
@@ -462,6 +466,9 @@ int main(int Argc, char* Argv[]) {
                 ClientScript = std::move(Val);
             } else if (Arg == "--target-compat") {
                 TargetCompatEnabled = true;
+            } else if (Arg == "--gate-bypass") {
+                DriverEntryGateBypassEnabled = true;
+                Logger::Log("{CYN}DriverEntry gate bypass ENABLED (analysis: neutralizes the entry guard){RESET}\n");
             } else if (Arg == "--no-pause") {
                 NoPause = true;
             } else if (Arg == "--workers-deep") {
@@ -782,10 +789,80 @@ int main(int Argc, char* Argv[]) {
         (uint64_t)drvObj.DriverSection, (uint64_t)drvObj.DriverInit,
         (uint64_t)drvObj.DriverExtension);
 
+    // --- Driver-entry gate bypass -------------------------------------------------
+    // Many protected drivers compile DriverEntry as a guard wrapper that branches to
+    // its real initializer only when the value the wrapper computed survives a check
+    // like `test eax,eax / je skip / cmp eax,<tag> / je skip / jmp <init>`; the tag is
+    // the driver's own "self-test failed" sentinel (vgk.sys: 0xD4494E49). The wrapper
+    // computes that value from obfuscated state the emulator cannot reproduce, so the
+    // guard always takes the skip branch and DriverEntry returns the sentinel after
+    // zero real work. Rewrite the guard's two conditional jumps into unconditional
+    // jumps to the same target as the wrapper's dispatch so the real initializer runs.
+    // This is pattern-driven and only rewrites a short local window at the entry.
+    if (DriverEntryGateBypassEnabled) {
+        const size_t GateScan = 0x80;
+        const uint64_t EpUc = DRIVER_BASE_UC + MainModule->GetEP();
+        uint8_t Gate[GateScan] = {};
+        if (uc_mem_read(UnicornEmu::PrimaryEngine, EpUc, Gate, GateScan) == UC_ERR_OK) {
+            // Find the 32-bit immediate of `cmp eax, imm32` (3D imm32) inside the guard.
+            int CmpOff = -1;
+            uint32_t Sentinel = 0;
+            for (int I = 0; I + 5 <= (int)GateScan; ++I) {
+                if (Gate[I] != 0x3D)
+                    continue;
+                memcpy(&Sentinel, Gate + I + 1, sizeof(Sentinel));
+                if (Sentinel != 0)
+                    CmpOff = I;
+            }
+            if (CmpOff >= 0) {
+                // The guard is `test eax,eax; je <skip>` then `cmp eax,<tag>; je <skip>`;
+                // <skip> is the wrapper's early `pop rbx; ret`. Identify the skip target
+                // from the first je and neutralize only jumps that land on it, so the
+                // sentinel compare and the real dispatch stay untouched.
+                int Patched = 0;
+                // The guard is `test eax,eax; je exit` followed by `cmp eax,imm32;
+                // je exit`, so the second je lies *after* the 4-byte immediate -
+                // scan a little past CmpOff rather than stopping at it.
+                const int ScanEnd = (int)GateScan - 2;
+                for (int I = 0; I <= ScanEnd; ) {
+                    // Short form: 74 rel8 (2 bytes). Near form: 0F 84 rel32 (6 bytes).
+                    int Len = 0;
+                    int64_t Target = -1;
+                    if (Gate[I] == 0x74) {
+                        Len = 2;
+                        Target = (int64_t)I + 2 + (int8_t)Gate[I + 1];
+                    } else if (Gate[I] == 0x0F && Gate[I + 1] == 0x84 && I + 6 <= (int)GateScan) {
+                        int32_t Rel = 0;
+                        memcpy(&Rel, Gate + I + 2, sizeof(Rel));
+                        Len = 6;
+                        Target = (int64_t)I + 6 + Rel;
+                    }
+                    if (Len == 0 || Target < 0 || Target >= (int64_t)GateScan) {
+                        ++I;
+                        continue;
+                    }
+                    // Only neutralize jumps that land on the wrapper's early exit
+                    // (`pop rbx` then `ret`), never the dispatch path itself.
+                    if (Gate[Target] != 0x5B || Gate[Target + 1] != 0xC3) {
+                        ++I;
+                        continue;
+                    }
+                    uint8_t Nops[6] = { 0x90, 0x90, 0x0F, 0x1F, 0x44, 0x00 };
+                    uc_mem_write(UnicornEmu::PrimaryEngine, EpUc + I, Nops, (size_t)Len);
+                    ++Patched;
+                    I += Len;
+                }
+                Logger::Log("{MAG}DriverEntry gate: guard at RVA 0x%llx compares against 0x%08x; "
+                            "neutralized %d guard jump(s){RESET}\n",
+                    (unsigned long long)(MainModule->GetEP() + CmpOff), Sentinel, Patched);
+            }
+        }
+    }
+
     UnicornEmu::MapKernelStructs();
     UnicornEmu::MapKuserSharedData();
 
-    UnicornEmu::InstallWatchpoints(UnicornEmu::PrimaryEngine);
+    UnicornEmu::InstallWatchpoints(UnicornEmu::PrimaryEngine, MainModule);
     if (FaceitTarget && TargetCompatEnabled) {
         TargetCompat::InstallFaceitAc20260908(
             UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());
