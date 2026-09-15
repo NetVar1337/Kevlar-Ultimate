@@ -37,11 +37,11 @@ bool VtilAnalysis::LiftImageRegion(const uint8_t* image, size_t imageSize, const
     auto slash = host.find_last_of(L"\\/");
     host = host.substr(0, slash + 1) + L"kevlar-vtil-host.ps1";
 
-    // The lifter consumes an image that is addressable by RVA, but the on-disk file
-    // layout is section-aligned differently (and the PE header spans the first
-    // SizeOfHeaders bytes), so lifting the raw file at an RVA decodes the wrong
-    // bytes for any RVA outside the header. Materialize a copy with each section
-    // written at its virtual address and lift that instead.
+    // The caller passes a buffer that is already section-mapped by PEMapper
+    // (sections live at their virtual addresses), which is exactly the layout the
+    // lifter indexes by RVA. Write it through verbatim. Re-mapping it here from the
+    // PE section table corrupted the input: the table's raw offsets describe the
+    // on-disk file, not this buffer, so most of the image came out zeroed.
     std::wstring staged = host.substr(0, slash + 1) + L"kevlar-vtil-image.bin";
     {
         std::ofstream out(staged, std::ios::binary | std::ios::trunc);
@@ -49,33 +49,7 @@ bool VtilAnalysis::LiftImageRegion(const uint8_t* image, size_t imageSize, const
             Logger::Log("{RED}VTIL: cannot stage mapped image{RESET}\n");
             return false;
         }
-        std::vector<uint8_t> mapped(imageSize, 0);
-        size_t copied = 0;
-        auto dos = (const IMAGE_DOS_HEADER*)image;
-        if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
-            auto nt = (const IMAGE_NT_HEADERS*)(image + dos->e_lfanew);
-            if (nt->Signature == IMAGE_NT_SIGNATURE) {
-                const size_t headerSize = (std::min)((size_t)nt->OptionalHeader.SizeOfHeaders, imageSize);
-                memcpy(mapped.data(), image, headerSize);
-                copied = headerSize;
-                auto section = IMAGE_FIRST_SECTION(nt);
-                for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-                    const size_t raw = section->PointerToRawData;
-                    const size_t rawSize = section->SizeOfRawData;
-                    const size_t va = section->VirtualAddress;
-                    if (!rawSize || raw + rawSize > imageSize || va >= imageSize)
-                        continue;
-                    const size_t span = (std::min)(rawSize, imageSize - va);
-                    memcpy(mapped.data() + va, image + raw, span);
-                    copied += span;
-                }
-            }
-        }
-        if (!copied) {
-            Logger::Log("{RED}VTIL: image is not a PE, lifting raw bytes{RESET}\n");
-            mapped.assign(image, image + imageSize);
-        }
-        out.write((const char*)mapped.data(), (std::streamsize)mapped.size());
+        out.write((const char*)image, (std::streamsize)imageSize);
         if (!out) {
             Logger::Log("{RED}VTIL: cannot write staged image{RESET}\n");
             return false;
