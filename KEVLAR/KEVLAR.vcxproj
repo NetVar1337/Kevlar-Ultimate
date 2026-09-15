@@ -229,6 +229,7 @@
     <ClCompile Include="api\ke\ke_timer.cpp" />
     <ClCompile Include="api\ke\ke_sync.cpp" />
     <ClCompile Include="api\ke\ke_misc.cpp" />
+    <ClCompile Include="api\ke\ke_etw.cpp" />
     <ClCompile Include="api\ex\ex_pool.cpp" />
     <ClCompile Include="api\ex\ex_sync.cpp" />
     <ClCompile Include="api\ex\ex_pushlock.cpp" />
@@ -307,6 +308,7 @@
     <ClInclude Include="api\ke\ke_timer.h" />
     <ClInclude Include="api\ke\ke_sync.h" />
     <ClInclude Include="api\ke\ke_misc.h" />
+    <ClInclude Include="api\ke\ke_etw.h" />
     <ClInclude Include="api\ex\ex_pool.h" />
     <ClInclude Include="api\ex\ex_sync.h" />
     <ClInclude Include="api\ex\ex_pushlock.h" />

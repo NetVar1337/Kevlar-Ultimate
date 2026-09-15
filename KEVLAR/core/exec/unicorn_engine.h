@@ -7,8 +7,10 @@
 #include <vector>
 #include <mutex>
 #include <shared_mutex>
+#include <optional>
 #include <windows.h>
 #include <Zydis/Zydis.h>
+#include "core/coverage/edge_coverage.h"
 
 #define DRIVER_BASE_UC        0xFFFFF80100000000ULL
 #define SENTINEL_BASE_UC      0xFFFF800000000000ULL
@@ -140,6 +142,7 @@ uint32_t OnIn(uc_engine* Uc, uint32_t Port, int Size, void* UserData);
 void OnOut(uc_engine* Uc, uint32_t Port, int Size, uint32_t Value, void* UserData);
 void OnCpuid(uc_engine* Uc, void* UserData);
 void OnDriverTrace(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
+void OnEdgeCoverage(uc_engine* Uc, uint64_t Addr, uint32_t Size, void* UserData);
 void OnDrvObjRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
 void OnModuleListRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
 void OnNtoskrnlRead(uc_engine* Uc, uc_mem_type Type, uint64_t Addr, int Size, int64_t Value, void* UserData);
@@ -206,6 +209,8 @@ void InstallTraceCapture(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize
 void TraceRecordApi(const char* FuncName, uint64_t RetVal, uint64_t CallerRip);
 void TraceFlush();
 void InstallDriverTrace(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
+void InstallEdgeCoverage(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
+std::optional<Kevlar::Coverage::ModuleLocation> ResolveCoverageModule(uint64_t UcAddr);
 void InstallDivWatch(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallSseAlignCheck(uc_engine* Uc, uint64_t DriverBase, uint64_t DriverSize);
 void InstallFocusedTrace(uc_engine* Uc, uint64_t Start, uint64_t End);

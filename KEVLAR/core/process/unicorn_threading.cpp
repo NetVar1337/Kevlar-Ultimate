@@ -21,6 +21,26 @@ namespace UnicornThread {
 
 static thread_local ThreadContext* TlsContext = nullptr;
 
+// Real ntoskrnl's KiInitializePcrLockQueues publishes a self-referential
+// KSPIN_LOCK_QUEUE array at KPRCB.LockQueue and stores its base in KPCR.LockArray
+// (gs:[0x28]). Worker contexts that take a queued spin lock dereference that
+// pointer, so a per-thread KPCR needs the same array instead of a NULL LockArray.
+static void SeedPerThreadLockQueues(uint8_t* PerThreadKpcr, uint64_t ThreadKpcrAddr) {
+    // KSPIN_LOCK_QUEUE is 16 bytes (Next + Lock); the kernel array spans
+    // KPRCB.LockQueue..KPRCB.PPLookasideList.
+    constexpr uint64_t kLockQueueStride = 16;
+    constexpr uint64_t kQueueCount =
+        (GEN__KPRCB_PPLookasideList - GEN__KPRCB_LockQueue) / kLockQueueStride;
+    const uint64_t QueueBase = ThreadKpcrAddr + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue;
+    for (uint64_t Index = 0; Index < kQueueCount; ++Index) {
+        uint64_t* Entry = (uint64_t*)(PerThreadKpcr + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue +
+                                      Index * kLockQueueStride);
+        Entry[0] = QueueBase + Index * kLockQueueStride;   // Next -> &this queue
+        Entry[1] = QueueBase + Index * kLockQueueStride;   // Lock slot also pointer-valid
+    }
+    *(uint64_t*)(PerThreadKpcr + 0x28) = QueueBase;
+}
+
 bool TlsHasGuestContext() { return TlsContext != nullptr; }
 
 static DWORD ThreadEntryCore(ThreadStartInfo* Info) {
@@ -198,6 +218,8 @@ ThreadContext* UnicornThread::Create(uint64_t StartRoutine, uint64_t StartContex
     uint64_t KprcbCurrentThreadOffset = KPCR_PRCB_OFFSET + KPRCB_CURRENT_THREAD;
     memcpy(PerThreadKpcr + KprcbCurrentThreadOffset, &EthreadAddr, 8);
 
+    SeedPerThreadLockQueues(PerThreadKpcr, ThreadKpcrAddr);
+
     uc_reg_write(Ctx->Engine, UC_X86_REG_GS_BASE, &ThreadKpcrAddr);
 
     uint64_t VerifyGsBase = 0;
@@ -325,6 +347,8 @@ static ThreadContext* CreateExImpl(uint64_t StartRoutine, uint64_t Arg1, uint64_
 
     uint64_t KprcbCurrentThreadOffset = KPCR_PRCB_OFFSET + KPRCB_CURRENT_THREAD;
     memcpy(PerThreadKpcr + KprcbCurrentThreadOffset, &EthreadAddr, 8);
+
+    SeedPerThreadLockQueues(PerThreadKpcr, ThreadKpcrAddr);
 
     uc_reg_write(Ctx->Engine, UC_X86_REG_GS_BASE, &ThreadKpcrAddr);
 

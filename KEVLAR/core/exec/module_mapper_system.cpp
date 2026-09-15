@@ -108,6 +108,36 @@ uint64_t UnicornEmu::MapKernelStructs() {
     uint64_t EthreadAddr = ETHREAD_BASE_UC;
     uc_mem_write(PrimaryEngine, KPCR_BASE_UC + KPCR_PRCB_OFFSET + KPRCB_CURRENT_THREAD, &EthreadAddr, 8);
 
+    // KiInitializePcrLockQueues publishes KPRCB.LockQueue[] as a KSPIN_LOCK_QUEUE
+    // array whose Next points at the queue itself, and stores the base in
+    // KPCR.LockArray (gs:[0x28]). Leaving LockArray NULL is both an emulation tell
+    // and a null-deref source: VGK dereferences gs:[0x28] on its first obfuscated
+    // path (drv+0x3eb149b -> 0x3e85fa0). Probed value: with Lock=0 the target takes
+    // drv+0x3e9b256 (write of its "0ini" tag through the derived pointer); with
+    // Lock pointer-valid the target reaches drv+0x3eb5dce (tagged-pointer store).
+    // Neither is the real Windows value yet — the field VGK reads is its own
+    // per-CPU scratch, written earlier in its own entry path — so this seeds a
+    // usable, mapped array and keeps the read non-NULL while the real writer is
+    // located. Every slot is pointer-valid so the target's computed offsets land
+    // in mapped memory instead of faulting on a zero slot.
+    {
+        // KSPIN_LOCK_QUEUE is 16 bytes (Next + Lock); the kernel array spans
+        // KPRCB.LockQueue..KPRCB.PPLookasideList.
+        constexpr uint64_t kLockQueueStride = 16;
+        constexpr uint64_t kQueueCount =
+            (GEN__KPRCB_PPLookasideList - GEN__KPRCB_LockQueue) / kLockQueueStride;
+        const uint64_t QueueBaseUc = KPCR_BASE_UC + KPCR_PRCB_OFFSET + GEN__KPRCB_LockQueue;
+        for (uint64_t Index = 0; Index < kQueueCount; ++Index) {
+            uint64_t NextUc = QueueBaseUc + Index * kLockQueueStride;
+            uint64_t Entry[2] = { NextUc, NextUc };
+            uc_mem_write(PrimaryEngine, NextUc, Entry, sizeof(Entry));
+        }
+        uint64_t LockArrayPtr = QueueBaseUc;
+        uc_mem_write(PrimaryEngine, KPCR_BASE_UC + 0x28, &LockArrayPtr, 8);
+        Logger::Log("{GRY}KPCR.LockArray -> KPRCB.LockQueue %llu self-referential queues at UC 0x%llx{RESET}\n",
+            (unsigned long long)kQueueCount, (unsigned long long)QueueBaseUc);
+    }
+
     uint64_t EthreadSize = 0x10000;
     EthreadBlock = _aligned_malloc((size_t)EthreadSize, 0x1000);
     if (!EthreadBlock) {

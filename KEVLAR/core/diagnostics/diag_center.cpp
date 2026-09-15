@@ -1046,10 +1046,13 @@ void DiagCenter::RunConsistencyChecks() {
         if (!FoundDriver) Check(SEV_WARN, "Driver_Mapped", "Driver image not found in mapped regions");
     }
 
-    if (mCpuidCount > 0) {
+    const uint32_t CpuidTotal = mCpuidCount.load(std::memory_order_relaxed);
+    const uint32_t CpuidIndex = mCpuidRingIdx.load(std::memory_order_relaxed);
+
+    if (CpuidTotal > 0) {
         bool AnyHvLeaf = false;
-        uint32_t CpuidCount = (mCpuidCount < CPUID_RING_SIZE) ? mCpuidCount : CPUID_RING_SIZE;
-        uint32_t Start = (mCpuidCount < CPUID_RING_SIZE) ? 0 : (mCpuidRingIdx % CPUID_RING_SIZE);
+        uint32_t CpuidCount = (CpuidTotal < CPUID_RING_SIZE) ? CpuidTotal : (uint32_t)CPUID_RING_SIZE;
+        uint32_t Start = (CpuidTotal < CPUID_RING_SIZE) ? 0 : (CpuidIndex % CPUID_RING_SIZE);
         for (uint32_t I = 0; I < CpuidCount; I++) {
             uint32_t Idx = (Start + I) % CPUID_RING_SIZE;
             if (mCpuidRing[Idx].Leaf >= 0x40000000 && mCpuidRing[Idx].Leaf <= 0x4FFFFFFF) {
@@ -1065,10 +1068,10 @@ void DiagCenter::RunConsistencyChecks() {
         }
     }
 
-    if (mHvspCount > 0 && mCpuidCount > 0) {
+    if (mHvspCount > 0 && CpuidTotal > 0) {
         bool HasCpuidHvBit = false;
-        uint32_t CpuidCount = (mCpuidCount < CPUID_RING_SIZE) ? mCpuidCount : CPUID_RING_SIZE;
-        uint32_t Start = (mCpuidCount < CPUID_RING_SIZE) ? 0 : (mCpuidRingIdx % CPUID_RING_SIZE);
+        uint32_t CpuidCount = (CpuidTotal < CPUID_RING_SIZE) ? CpuidTotal : (uint32_t)CPUID_RING_SIZE;
+        uint32_t Start = (CpuidTotal < CPUID_RING_SIZE) ? 0 : (CpuidIndex % CPUID_RING_SIZE);
         for (uint32_t I = 0; I < CpuidCount; I++) {
             uint32_t Idx = (Start + I) % CPUID_RING_SIZE;
             if (mCpuidRing[Idx].Leaf == 1 && (mCpuidRing[Idx].PostEcx & (1 << 31))) {
@@ -1091,5 +1094,6 @@ void DiagCenter::RunConsistencyChecks() {
         Check(SEV_WARN, "Stack_Reject_Ratio", "Stack rejection ratio very high, possible stack corruption or incorrect stack base");
     }
 
-    Logger::Log("{GRN}Consistency checks completed: %u checks recorded{RESET}\n", mConsistencyCount);
+    const uint32_t ConsistencyTotal = mConsistencyCount.load(std::memory_order_relaxed);
+    Logger::Log("{GRN}Consistency checks completed: %u checks recorded{RESET}\n", ConsistencyTotal);
 }

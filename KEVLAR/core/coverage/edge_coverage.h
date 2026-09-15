@@ -60,6 +60,9 @@ public:
     [[nodiscard]] bool Empty() const;
 
     void Clear();
+    [[nodiscard]] std::size_t Merge(const CoverageSnapshot& Other);
+    [[nodiscard]] CoverageSnapshot Snapshot() const;
+    [[nodiscard]] bool Restore(const CoverageSnapshot& State);
     [[nodiscard]] std::vector<Edge> NewEdgesComparedTo(const CoverageSnapshot& Baseline) const;
 
     [[nodiscard]] bool WriteBitmap(const std::string& Path) const;

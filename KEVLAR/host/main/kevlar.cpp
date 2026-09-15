@@ -326,6 +326,8 @@ int main(int Argc, char* Argv[]) {
                 Logger::Log("{CYN}VGK override: added 0xC0000022->0 and 0xC000007A->0 to status override map{RESET}\n");
             } else if (Arg == "--diag") {
                 UnicornEmu::DiagnosticHooksEnabled = true;
+                if (!DiagCenter::Instance().IsEnabled())
+                    DiagCenter::Instance().Initialize();
                 Logger::Log("{YEL}Diagnostic hooks ENABLED (slow mode){RESET}\n");
             } else if (Arg.rfind("--module", 0) == 0) {
                 std::string Val = (Arg.size() > 8 && Arg[8] == '=')
@@ -802,6 +804,11 @@ int main(int Argc, char* Argv[]) {
         constexpr uint64_t kLoopSpan = 0x5000;
         UnicornEmu::InstallProtectedCodeWriteWatch(UnicornEmu::PrimaryEngine,
             DRIVER_BASE_UC + kLoopRva, kLoopSpan);
+    }
+
+    if (!AflBitmapPath.empty() || !CoverageOutPath.empty() || !CoverageBasePath.empty()) {
+        UnicornEmu::InstallEdgeCoverage(
+            UnicornEmu::PrimaryEngine, DRIVER_BASE_UC, MainModule->GetVirtualSize());
     }
 
     //UnicornEmu::InstallStackWriteWatch(UnicornEmu::PrimaryEngine,
