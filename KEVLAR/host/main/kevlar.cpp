@@ -56,6 +56,10 @@ static bool EacServiceEmu = false;
 // Neutralizes a protected driver's DriverEntry guard wrapper so the real initializer
 // runs instead of returning the driver's self-test sentinel. See kevlar.cpp usage.
 static bool DriverEntryGateBypassEnabled = false;
+// Analysis-only memory pre-seeds: --poke <rva>=<hex> writes a 64-bit value into the
+// mapped driver image at an RVA once relocation has been applied. Lets a manifest slot
+// the file leaves zero (and the loader would normally fill) be supplied for testing.
+static std::vector<std::pair<uint64_t, uint64_t>> g_Pokes;
 static std::string AflBitmapPath;
 static std::string CoverageBasePath;
 static std::string CoverageOutPath;
@@ -469,6 +473,19 @@ int main(int Argc, char* Argv[]) {
             } else if (Arg == "--gate-bypass") {
                 DriverEntryGateBypassEnabled = true;
                 Logger::Log("{CYN}DriverEntry gate bypass ENABLED (analysis: neutralizes the entry guard){RESET}\n");
+            } else if (Arg.rfind("--poke", 0) == 0) {
+                std::string Val = (Arg.size() > 6 && Arg[6] == '=')
+                    ? Arg.substr(7) : (I + 1 < Argc ? Argv[++I] : "");
+                const auto Eq = Val.find('=');
+                if (Val.empty() || Eq == std::string::npos) {
+                    Logger::Log("{RED}--poke requires <rva>=<hex64>{RESET}\n");
+                    return 1;
+                }
+                const uint64_t PokeRva = strtoull(Val.substr(0, Eq).c_str(), nullptr, 0);
+                const uint64_t PokeVal = strtoull(Val.substr(Eq + 1).c_str(), nullptr, 0);
+                g_Pokes.emplace_back(PokeRva, PokeVal);
+                Logger::Log("{CYN}Poke queued: drv+0x%llx = 0x%llx{RESET}\n",
+                    (unsigned long long)PokeRva, (unsigned long long)PokeVal);
             } else if (Arg == "--no-pause") {
                 NoPause = true;
             } else if (Arg == "--workers-deep") {
@@ -861,6 +878,19 @@ int main(int Argc, char* Argv[]) {
 
     UnicornEmu::MapKernelStructs();
     UnicornEmu::MapKuserSharedData();
+
+    // Apply analysis pre-seeds to the mapped (relocated) driver image. Done after the
+    // image is mapped and relocated so a seeded pointer stays meaningful.
+    for (const auto& Poke : g_Pokes) {
+        const uint64_t PokeUc = DRIVER_BASE_UC + Poke.first;
+        if (uc_mem_write(UnicornEmu::PrimaryEngine, PokeUc, &Poke.second, sizeof(Poke.second)) == UC_ERR_OK) {
+            Logger::Log("{MAG}Poke applied: drv+0x%llx = 0x%llx{RESET}\n",
+                (unsigned long long)Poke.first, (unsigned long long)Poke.second);
+        } else {
+            Logger::Log("{RED}Poke failed at drv+0x%llx (unmapped){RESET}\n",
+                (unsigned long long)Poke.first);
+        }
+    }
 
     UnicornEmu::InstallWatchpoints(UnicornEmu::PrimaryEngine, MainModule);
     if (FaceitTarget && TargetCompatEnabled) {
